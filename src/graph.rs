@@ -91,6 +91,11 @@ impl RuntimeGraph {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
         let file = File::open(path).map_err(|e| GraphError::IoError(e.to_string()))?;
         let reader = BufReader::new(file);
+        Self::from_reader(reader)
+    }
+
+    /// Load a graph from a reader
+    pub fn from_reader<R: std::io::BufRead>(reader: R) -> Result<Self, GraphError> {
         let message_reader = serialize::read_message(reader, ReaderOptions::new())
             .map_err(|e| GraphError::ParseError(e.to_string()))?;
         let graph_reader = message_reader.get_root::<graph::Reader>()

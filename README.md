@@ -156,6 +156,17 @@ cargo run -- generate hello_world.0
 cargo run -- execute hello_world.0
 ```
 
+## Verification
+
+To ensure the language remains consistent across all Agents, we enforce a strict "Golden Rule" verification suite.
+
+```bash
+# Run the Golden Rule tests
+cargo test
+```
+
+Any PR that breaks these tests (e.g., changes the hash of the Genesis Block) will be rejected.
+
 ---
 
 ## Roadmap

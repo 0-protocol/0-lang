@@ -5,6 +5,7 @@
 pub mod tensor;
 pub mod graph;
 pub mod vm;
+pub mod stdlib;
 
 // Include the generated Cap'n Proto types
 pub mod zero_capnp {
