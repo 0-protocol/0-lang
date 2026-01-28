@@ -3,8 +3,10 @@
 //! This module contains the canonical implementations of the standard
 //! 0-lang graphs used for verification and testing.
 
+use crate::graph::Op;
+use crate::verify::{hash_constant_node, hash_operation_node};
 use crate::zero_capnp::{graph, Operation};
-use crate::{compute_hash, Tensor};
+use crate::Tensor;
 use capnp::message::{Builder, HeapAllocator};
 
 /// The "Hello" concept encoded as a 768-dimensional embedding vector.
@@ -37,8 +39,8 @@ pub fn generate_hello_world(
         graph_builder.set_version(0);
 
         let embedding = hello_embedding();
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let node_hash = compute_hash(&embedding_bytes);
+        let tensor = Tensor::new(vec![768], embedding.clone(), 1.0);
+        let node_hash = hash_constant_node(&tensor);
 
         let mut nodes = graph_builder.reborrow().init_nodes(1);
 
@@ -100,14 +102,12 @@ pub fn generate_simple_math(
         let tensor_a = Tensor::scalar(1.0, 1.0);
         let tensor_b = Tensor::scalar(2.0, 1.0);
 
-        let hash_a = compute_hash(&tensor_a.to_bytes());
-        let hash_b = compute_hash(&tensor_b.to_bytes());
+        // Use canonical hashing for constants
+        let hash_a = hash_constant_node(&tensor_a);
+        let hash_b = hash_constant_node(&tensor_b);
 
-        // Hash for the operation node (hash of operation + inputs)
-        let mut op_content = vec![0u8]; // Operation::Add = 0
-        op_content.extend(&hash_a);
-        op_content.extend(&hash_b);
-        let hash_result = compute_hash(&op_content);
+        // Use canonical hashing for operation node
+        let hash_result = hash_operation_node(Op::Add, &[hash_a.clone(), hash_b.clone()]);
 
         // Create 3 nodes: A=1.0, B=2.0, Result=A+B
         let mut nodes = graph_builder.reborrow().init_nodes(3);

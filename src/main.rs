@@ -9,7 +9,7 @@ use capnp::serialize;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use zerolang::zero_capnp::{graph, node, proof};
-use zerolang::{stdlib, RuntimeGraph, VM};
+use zerolang::{stdlib, verify_graph, RuntimeGraph, VerifyOptions, VM};
 
 /// ZeroLang CLI - The first language for machines, by machines
 #[derive(Parser)]
@@ -34,11 +34,25 @@ enum Commands {
     Execute {
         /// Input file path
         input: PathBuf,
+        /// Skip verification (unsafe mode)
+        #[arg(long)]
+        r#unsafe: bool,
     },
     /// Inspect a Zero graph file (human-readable debug view)
     Inspect {
         /// Input file path
         input: PathBuf,
+    },
+    /// Verify a Zero graph file (check hashes, proofs, structure)
+    Verify {
+        /// Input file path
+        input: PathBuf,
+        /// Skip hash verification
+        #[arg(long)]
+        skip_hash: bool,
+        /// Skip halting proof requirement
+        #[arg(long)]
+        skip_halting: bool,
     },
 }
 
@@ -86,8 +100,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Execute { input } => execute_graph(input)?,
+        Commands::Execute { input, r#unsafe } => execute_graph(input, *r#unsafe)?,
         Commands::Inspect { input } => inspect_graph(input)?,
+        Commands::Verify {
+            input,
+            skip_hash,
+            skip_halting,
+        } => verify_graph_cmd(input, *skip_hash, *skip_halting)?,
     }
 
     Ok(())
@@ -98,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ============================================================================
 
 /// Execute a Zero graph file using the 0-VM
-fn execute_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn execute_graph(input: &PathBuf, unsafe_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Loading: {}", input.display());
 
     // Load the graph
@@ -107,8 +126,32 @@ fn execute_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Protocol Version: {}", graph.version);
     println!("  Nodes: {}", graph.node_count());
 
-    // Create VM and execute
-    let mut vm = VM::new();
+    // Verify before execution (unless unsafe mode)
+    if !unsafe_mode {
+        let options = VerifyOptions {
+            verify_hashes: true,
+            require_halting_proof: false, // Relaxed for now, will be strict in Phase B
+            verify_shape_proofs: false,   // Not implemented yet
+        };
+        match verify_graph(&graph, &options) {
+            Ok(result) => {
+                println!(
+                    "  Verification: PASSED ({} nodes, {} hash checks)",
+                    result.nodes_verified, result.hash_checks_passed
+                );
+            }
+            Err(e) => {
+                println!("  Verification: FAILED - {}", e);
+                println!("\n  Use --unsafe to skip verification (not recommended)");
+                return Err(Box::new(e));
+            }
+        }
+    } else {
+        println!("  Verification: SKIPPED (unsafe mode)");
+    }
+
+    // Create VM (use fuel from halting proof if present)
+    let mut vm = VM::from_graph(&graph);
     let outputs = vm.execute(&graph)?;
 
     println!("\n  Execution Statistics:");
@@ -263,6 +306,91 @@ fn inspect_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("═══════════════════════════════════════════════════════════════");
+
+    Ok(())
+}
+
+// ============================================================================
+// VERIFIER
+// ============================================================================
+
+/// Verify a Zero graph file
+fn verify_graph_cmd(
+    input: &PathBuf,
+    skip_hash: bool,
+    skip_halting: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║                    ZERO GRAPH VERIFIER                       ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("File: {}", input.display());
+
+    // Load the graph
+    let graph = RuntimeGraph::load_from_file(input)?;
+
+    println!("Protocol Version: {}", graph.version);
+    println!("Total Nodes: {}", graph.node_count());
+    println!();
+
+    // Set up verification options
+    let options = VerifyOptions {
+        verify_hashes: !skip_hash,
+        require_halting_proof: !skip_halting,
+        verify_shape_proofs: false, // Not implemented yet
+    };
+
+    println!("┌─ VERIFICATION OPTIONS ─────────────────────────────────────────");
+    println!(
+        "│ Hash verification: {}",
+        if options.verify_hashes { "ON" } else { "OFF" }
+    );
+    println!(
+        "│ Halting proof required: {}",
+        if options.require_halting_proof {
+            "ON"
+        } else {
+            "OFF"
+        }
+    );
+    println!(
+        "│ Shape proof verification: {}",
+        if options.verify_shape_proofs {
+            "ON"
+        } else {
+            "OFF"
+        }
+    );
+    println!("└─────────────────────────────────────────────────────────────────");
+    println!();
+
+    // Run verification
+    match verify_graph(&graph, &options) {
+        Ok(result) => {
+            println!("┌─ VERIFICATION RESULT ──────────────────────────────────────────");
+            println!("│ Status: ✓ PASSED");
+            println!("│ Nodes verified: {}", result.nodes_verified);
+            println!("│ Hash checks: {}", result.hash_checks_passed);
+            if let Some(halting) = result.halting_proof {
+                println!(
+                    "│ Halting proof: max_steps={}, fuel={}",
+                    halting.max_steps, halting.fuel_budget
+                );
+            }
+            println!("└─────────────────────────────────────────────────────────────────");
+            println!();
+            println!("Graph is valid and safe to execute.");
+        }
+        Err(e) => {
+            println!("┌─ VERIFICATION RESULT ──────────────────────────────────────────");
+            println!("│ Status: ✗ FAILED");
+            println!("│ Error: {}", e);
+            println!("└─────────────────────────────────────────────────────────────────");
+            println!();
+            println!("Graph is NOT safe to execute.");
+            return Err(Box::new(e));
+        }
+    }
 
     Ok(())
 }

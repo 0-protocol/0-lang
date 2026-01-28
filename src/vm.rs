@@ -4,9 +4,62 @@
 //! evaluating operations on tensors.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::graph::{GraphError, NodeHash, Op, RuntimeGraph, RuntimeNode};
 use crate::Tensor;
+
+/// Trait for resolving external node calls.
+///
+/// Implement this trait to provide custom behavior for external URIs.
+/// The resolver receives the URI and input tensors, and returns output tensor(s).
+pub trait ExternalResolver: Send + Sync {
+    /// Resolve an external call.
+    ///
+    /// # Arguments
+    /// * `uri` - The URI identifying the external resource (e.g., "ffi:rust:my_func")
+    /// * `inputs` - Input tensors from the graph
+    ///
+    /// # Returns
+    /// A tensor result or an error message
+    fn resolve(&self, uri: &str, inputs: Vec<&Tensor>) -> Result<Tensor, String>;
+}
+
+/// A resolver that rejects all external calls (default safe behavior)
+pub struct RejectingResolver;
+
+impl ExternalResolver for RejectingResolver {
+    fn resolve(&self, uri: &str, _inputs: Vec<&Tensor>) -> Result<Tensor, String> {
+        Err(format!(
+            "External node with URI '{}' cannot be resolved. \
+            Configure an ExternalResolver or use --unsafe to skip external nodes.",
+            uri
+        ))
+    }
+}
+
+/// A resolver that returns a zero tensor for any external call (for testing)
+pub struct MockResolver {
+    /// The shape of tensors to return
+    pub output_shape: Vec<u32>,
+    /// The confidence to use
+    pub confidence: f32,
+}
+
+impl Default for MockResolver {
+    fn default() -> Self {
+        Self {
+            output_shape: vec![1],
+            confidence: 1.0,
+        }
+    }
+}
+
+impl ExternalResolver for MockResolver {
+    fn resolve(&self, _uri: &str, _inputs: Vec<&Tensor>) -> Result<Tensor, String> {
+        Ok(Tensor::zeros(self.output_shape.clone(), self.confidence))
+    }
+}
 
 /// The ZeroLang Virtual Machine
 pub struct VM {
@@ -16,6 +69,8 @@ pub struct VM {
     fuel: u64,
     /// Operations executed
     ops_executed: u64,
+    /// External resolver for handling External nodes
+    external_resolver: Option<Arc<dyn ExternalResolver>>,
 }
 
 impl VM {
@@ -25,6 +80,7 @@ impl VM {
             memory: HashMap::new(),
             fuel: 1_000_000, // Default: 1 million operations
             ops_executed: 0,
+            external_resolver: None,
         }
     }
 
@@ -34,7 +90,31 @@ impl VM {
             memory: HashMap::new(),
             fuel,
             ops_executed: 0,
+            external_resolver: None,
         }
+    }
+
+    /// Create a VM with fuel from graph's halting proof (or default if none)
+    pub fn from_graph(graph: &RuntimeGraph) -> Self {
+        if let Some((_max_steps, fuel_budget)) = graph.get_halting_proof() {
+            Self::with_fuel(fuel_budget)
+        } else {
+            Self::new()
+        }
+    }
+
+    /// Set an external resolver for handling External nodes
+    pub fn with_external_resolver(mut self, resolver: Arc<dyn ExternalResolver>) -> Self {
+        self.external_resolver = Some(resolver);
+        self
+    }
+
+    /// Check if this graph contains external nodes
+    pub fn graph_has_external_nodes(graph: &RuntimeGraph) -> bool {
+        graph
+            .nodes
+            .values()
+            .any(|node| matches!(node, RuntimeNode::External { .. }))
     }
 
     /// Execute a graph and return the output tensors
@@ -96,6 +176,10 @@ impl VM {
             } => {
                 self.ops_executed += 1;
                 self.execute_branch(condition, *threshold, true_branch, false_branch)?
+            }
+            RuntimeNode::External { uri, inputs } => {
+                self.ops_executed += 1;
+                self.execute_external(uri, inputs)?
             }
         };
 
@@ -222,6 +306,163 @@ impl VM {
                 }
                 Ok(input_tensors[0].clone())
             }
+
+            // Matrix multiplication
+            Op::Matmul => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                input_tensors[0]
+                    .matmul(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+
+            // Softmax activation
+            Op::Softmax => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                Ok(input_tensors[0].softmax())
+            }
+
+            // Comparison operations
+            Op::Eq => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                input_tensors[0]
+                    .eq(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+            Op::Gt => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                input_tensors[0]
+                    .gt(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+            Op::Lt => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                input_tensors[0]
+                    .lt(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+
+            // Argmax
+            Op::Argmax => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                Ok(input_tensors[0].argmax())
+            }
+
+            // Shape manipulation
+            Op::Reshape => {
+                // Reshape needs the target shape as the second input
+                // For now, we'll treat the second tensor's data as shape
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                let new_shape: Vec<u32> = input_tensors[1].data.iter().map(|&x| x as u32).collect();
+                input_tensors[0]
+                    .reshape(new_shape)
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+            Op::Transpose => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                input_tensors[0]
+                    .transpose()
+                    .map_err(|e| VMError::TensorError(e.to_string()))
+            }
+            Op::Concat => {
+                if input_tensors.is_empty() {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: 0,
+                    });
+                }
+                Tensor::concat(&input_tensors).map_err(|e| VMError::TensorError(e.to_string()))
+            }
+
+            // Embed - converts a hash to a deterministic embedding
+            // For now, we create a simple deterministic embedding from the input
+            Op::Embed => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                // Create a 768-dim embedding from the input tensor's data
+                // This is a placeholder - a real implementation might use a lookup table
+                let mut embedding = vec![0.0f32; 768];
+                for (i, &val) in input_tensors[0].data.iter().take(768).enumerate() {
+                    embedding[i] = val;
+                }
+                // Fill remaining with deterministic pattern based on existing values
+                for i in input_tensors[0].data.len()..768 {
+                    embedding[i] = ((i as f32) * 0.1).sin() * 0.5 + 0.5;
+                }
+                Ok(Tensor {
+                    shape: vec![768],
+                    data: embedding,
+                    confidence: input_tensors[0].confidence,
+                })
+            }
+        }
+    }
+
+    /// Execute an external node
+    fn execute_external(&self, uri: &str, inputs: &[NodeHash]) -> Result<Tensor, VMError> {
+        // Fetch input tensors
+        let input_tensors: Result<Vec<&Tensor>, VMError> = inputs
+            .iter()
+            .map(|h| {
+                self.memory
+                    .get(h)
+                    .ok_or_else(|| VMError::NodeNotComputed(hex::encode(h)))
+            })
+            .collect();
+        let input_tensors = input_tensors?;
+
+        // Use the resolver if available
+        match &self.external_resolver {
+            Some(resolver) => resolver.resolve(uri, input_tensors).map_err(|e| {
+                VMError::ExternalResolutionFailed {
+                    uri: uri.to_string(),
+                    reason: e,
+                }
+            }),
+            None => Err(VMError::ExternalNodeRequiresResolver(uri.to_string())),
         }
     }
 
@@ -283,9 +524,21 @@ pub enum VMError {
     NodeNotFound(String),
     NodeNotComputed(String),
     OutOfFuel,
-    WrongInputCount { expected: usize, got: usize },
+    WrongInputCount {
+        expected: usize,
+        got: usize,
+    },
     TensorError(String),
     BranchConditionNotScalar,
+    /// Operation not yet implemented
+    UnimplementedOperation(String),
+    /// External node requires a resolver
+    ExternalNodeRequiresResolver(String),
+    /// External node resolution failed
+    ExternalResolutionFailed {
+        uri: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for VMError {
@@ -300,6 +553,15 @@ impl std::fmt::Display for VMError {
             }
             VMError::TensorError(e) => write!(f, "Tensor error: {}", e),
             VMError::BranchConditionNotScalar => write!(f, "Branch condition must be a scalar"),
+            VMError::UnimplementedOperation(op) => {
+                write!(f, "Operation not yet implemented: {}", op)
+            }
+            VMError::ExternalNodeRequiresResolver(uri) => {
+                write!(f, "External node requires resolver: {}", uri)
+            }
+            VMError::ExternalResolutionFailed { uri, reason } => {
+                write!(f, "External resolution failed for '{}': {}", uri, reason)
+            }
         }
     }
 }
@@ -312,12 +574,55 @@ mod tests {
     use crate::graph::RuntimeNode;
 
     #[test]
+    fn test_external_node_with_mock_resolver() {
+        let uri = "test:mock".to_string();
+        let input_tensor = Tensor::scalar(1.0, 1.0);
+        let input_hash = vec![1, 2, 3];
+        let external_hash = vec![4, 5, 6];
+
+        let mut nodes = HashMap::new();
+        nodes.insert(input_hash.clone(), RuntimeNode::Constant(input_tensor));
+        nodes.insert(
+            external_hash.clone(),
+            RuntimeNode::External {
+                uri,
+                inputs: vec![input_hash.clone()],
+            },
+        );
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: input_hash,
+            outputs: vec![external_hash],
+            version: 0,
+            proofs: vec![],
+        };
+
+        // Without resolver, should fail
+        let mut vm = VM::new();
+        let result = vm.execute(&graph);
+        assert!(matches!(
+            result,
+            Err(VMError::ExternalNodeRequiresResolver(_))
+        ));
+
+        // With mock resolver, should succeed
+        let resolver = Arc::new(MockResolver::default());
+        let mut vm = VM::new().with_external_resolver(resolver);
+        let result = vm.execute(&graph);
+        assert!(result.is_ok());
+        let outputs = result.unwrap();
+        assert_eq!(outputs.len(), 1);
+    }
+
+    #[test]
     fn test_vm_constant_execution() {
         let mut graph = RuntimeGraph {
             nodes: HashMap::new(),
             entry_point: vec![1, 2, 3],
             outputs: vec![vec![1, 2, 3]],
             version: 0,
+            proofs: vec![],
         };
 
         graph.nodes.insert(
@@ -339,6 +644,7 @@ mod tests {
             entry_point: vec![1],
             outputs: vec![vec![3]],
             version: 0,
+            proofs: vec![],
         };
 
         // Node 1: Constant 10.0

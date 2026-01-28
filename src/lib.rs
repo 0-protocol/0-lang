@@ -5,6 +5,7 @@
 pub mod graph;
 pub mod stdlib;
 pub mod tensor;
+pub mod verify;
 pub mod vm;
 
 // Include the generated Cap'n Proto types
@@ -13,9 +14,10 @@ pub mod zero_capnp {
 }
 
 // Re-export commonly used types
-pub use graph::RuntimeGraph;
+pub use graph::{Op, RuntimeGraph, RuntimeNode, RuntimeProof};
 pub use tensor::Tensor;
-pub use vm::VM;
+pub use verify::{verify_graph, HaltingProofInfo, VerifyError, VerifyOptions, VerifyResult};
+pub use vm::{ExternalResolver, MockResolver, RejectingResolver, VMError, VM};
 
 use sha2::{Digest, Sha256};
 
