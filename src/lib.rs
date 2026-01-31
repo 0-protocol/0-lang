@@ -3,6 +3,7 @@
 //! No syntax sugar. No whitespace. No variable names. Pure logic density.
 
 pub mod graph;
+pub mod resolvers;
 pub mod stdlib;
 pub mod tensor;
 pub mod verify;
@@ -15,6 +16,7 @@ pub mod zero_capnp {
 
 // Re-export commonly used types
 pub use graph::{Op, RuntimeGraph, RuntimeNode, RuntimeProof};
+pub use resolvers::{HttpMethod, HttpResolver, HttpResolverBuilder};
 pub use tensor::Tensor;
 pub use verify::{verify_graph, HaltingProofInfo, VerifyError, VerifyOptions, VerifyResult};
 pub use vm::{ExternalResolver, MockResolver, RejectingResolver, VMError, VM};
