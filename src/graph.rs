@@ -52,10 +52,14 @@ pub enum Op {
     Eq,
     Gt,
     Lt,
+    Gte,  // Greater than or equal
+    Lte,  // Less than or equal
     // Reductions
     Sum,
     Mean,
     Argmax,
+    Min,  // Element-wise or reduction min
+    Max,  // Element-wise or reduction max
     // Shape manipulation
     Reshape,
     Transpose,
@@ -63,6 +67,9 @@ pub enum Op {
     // Special
     Identity,
     Embed,
+    Abs,    // Absolute value
+    Neg,    // Negation
+    Clamp,  // Clamp values to range (useful for position limits)
 }
 
 impl Op {
@@ -84,10 +91,14 @@ impl Op {
             Operation::Eq => Ok(Op::Eq),
             Operation::Gt => Ok(Op::Gt),
             Operation::Lt => Ok(Op::Lt),
+            Operation::Gte => Ok(Op::Gte),
+            Operation::Lte => Ok(Op::Lte),
             // Reductions
             Operation::Sum => Ok(Op::Sum),
             Operation::Mean => Ok(Op::Mean),
             Operation::Argmax => Ok(Op::Argmax),
+            Operation::Min => Ok(Op::Min),
+            Operation::Max => Ok(Op::Max),
             // Shape manipulation
             Operation::Reshape => Ok(Op::Reshape),
             Operation::Transpose => Ok(Op::Transpose),
@@ -95,6 +106,10 @@ impl Op {
             // Special
             Operation::Identity => Ok(Op::Identity),
             Operation::Embed => Ok(Op::Embed),
+            // Math operations (for trading)
+            Operation::Abs => Ok(Op::Abs),
+            Operation::Neg => Ok(Op::Neg),
+            Operation::Clamp => Ok(Op::Clamp),
         }
     }
 }

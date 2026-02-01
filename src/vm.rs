@@ -363,6 +363,35 @@ impl VM {
                     .lt(input_tensors[1])
                     .map_err(|e| VMError::TensorError(e.to_string()))
             }
+            Op::Gte => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                // Gte = NOT Lt
+                let lt_result = input_tensors[0]
+                    .lt(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))?;
+                // Invert: 1.0 - result (since comparison returns 0 or 1)
+                let inverted: Vec<f32> = lt_result.data.iter().map(|&v| 1.0 - v).collect();
+                Ok(Tensor::new(lt_result.shape, inverted, lt_result.confidence))
+            }
+            Op::Lte => {
+                if input_tensors.len() != 2 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    });
+                }
+                // Lte = NOT Gt
+                let gt_result = input_tensors[0]
+                    .gt(input_tensors[1])
+                    .map_err(|e| VMError::TensorError(e.to_string()))?;
+                let inverted: Vec<f32> = gt_result.data.iter().map(|&v| 1.0 - v).collect();
+                Ok(Tensor::new(gt_result.shape, inverted, gt_result.confidence))
+            }
 
             // Argmax
             Op::Argmax => {
@@ -373,6 +402,68 @@ impl VM {
                     });
                 }
                 Ok(input_tensors[0].argmax())
+            }
+
+            // Min - element-wise minimum of two tensors, or reduction if single input
+            Op::Min => {
+                if input_tensors.len() == 1 {
+                    // Reduction: find minimum value
+                    let min_val = input_tensors[0]
+                        .data
+                        .iter()
+                        .cloned()
+                        .fold(f32::INFINITY, f32::min);
+                    Ok(Tensor::scalar(min_val, input_tensors[0].confidence))
+                } else if input_tensors.len() == 2 {
+                    // Element-wise minimum
+                    if input_tensors[0].shape != input_tensors[1].shape {
+                        return Err(VMError::TensorError("Shape mismatch for Min".to_string()));
+                    }
+                    let data: Vec<f32> = input_tensors[0]
+                        .data
+                        .iter()
+                        .zip(input_tensors[1].data.iter())
+                        .map(|(&a, &b)| a.min(b))
+                        .collect();
+                    let confidence = input_tensors[0].confidence.min(input_tensors[1].confidence);
+                    Ok(Tensor::new(input_tensors[0].shape.clone(), data, confidence))
+                } else {
+                    Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    })
+                }
+            }
+
+            // Max - element-wise maximum of two tensors, or reduction if single input
+            Op::Max => {
+                if input_tensors.len() == 1 {
+                    // Reduction: find maximum value
+                    let max_val = input_tensors[0]
+                        .data
+                        .iter()
+                        .cloned()
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    Ok(Tensor::scalar(max_val, input_tensors[0].confidence))
+                } else if input_tensors.len() == 2 {
+                    // Element-wise maximum
+                    if input_tensors[0].shape != input_tensors[1].shape {
+                        return Err(VMError::TensorError("Shape mismatch for Max".to_string()));
+                    }
+                    let data: Vec<f32> = input_tensors[0]
+                        .data
+                        .iter()
+                        .zip(input_tensors[1].data.iter())
+                        .map(|(&a, &b)| a.max(b))
+                        .collect();
+                    let confidence = input_tensors[0].confidence.min(input_tensors[1].confidence);
+                    Ok(Tensor::new(input_tensors[0].shape.clone(), data, confidence))
+                } else {
+                    Err(VMError::WrongInputCount {
+                        expected: 2,
+                        got: input_tensors.len(),
+                    })
+                }
             }
 
             // Shape manipulation
@@ -434,6 +525,61 @@ impl VM {
                     data: embedding,
                     confidence: input_tensors[0].confidence,
                 })
+            }
+
+            // Abs - absolute value
+            Op::Abs => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                let data: Vec<f32> = input_tensors[0].data.iter().map(|&v| v.abs()).collect();
+                Ok(Tensor::new(
+                    input_tensors[0].shape.clone(),
+                    data,
+                    input_tensors[0].confidence,
+                ))
+            }
+
+            // Neg - negation
+            Op::Neg => {
+                if input_tensors.len() != 1 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 1,
+                        got: input_tensors.len(),
+                    });
+                }
+                let data: Vec<f32> = input_tensors[0].data.iter().map(|&v| -v).collect();
+                Ok(Tensor::new(
+                    input_tensors[0].shape.clone(),
+                    data,
+                    input_tensors[0].confidence,
+                ))
+            }
+
+            // Clamp - clamp values to [min, max] range
+            // Inputs: [tensor, min_tensor, max_tensor]
+            Op::Clamp => {
+                if input_tensors.len() != 3 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 3,
+                        got: input_tensors.len(),
+                    });
+                }
+                let min_val = input_tensors[1].as_scalar();
+                let max_val = input_tensors[2].as_scalar();
+                let data: Vec<f32> = input_tensors[0]
+                    .data
+                    .iter()
+                    .map(|&v| v.clamp(min_val, max_val))
+                    .collect();
+                Ok(Tensor::new(
+                    input_tensors[0].shape.clone(),
+                    data,
+                    input_tensors[0].confidence,
+                ))
             }
         }
     }

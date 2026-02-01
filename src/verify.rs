@@ -151,6 +151,14 @@ fn op_to_byte(op: Op) -> u8 {
         Op::Concat => 17,
         Op::Identity => 18,
         Op::Embed => 19,
+        // New operations for trading
+        Op::Gte => 20,
+        Op::Lte => 21,
+        Op::Min => 22,
+        Op::Max => 23,
+        Op::Abs => 24,
+        Op::Neg => 25,
+        Op::Clamp => 26,
     }
 }
 

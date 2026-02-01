@@ -70,11 +70,15 @@ enum Operation {
   eq @9;
   gt @10;
   lt @11;
+  gte @20;         # Greater than or equal
+  lte @21;         # Less than or equal
   
   # Reduction
   sum @12;
   mean @13;
   argmax @14;
+  min @22;         # Element-wise or reduction minimum
+  max @23;         # Element-wise or reduction maximum
   
   # Shape manipulation
   reshape @15;
@@ -84,6 +88,11 @@ enum Operation {
   # Special
   identity @18;    # Pass-through (useful for graph composition)
   embed @19;       # Convert hash reference to embedding vector
+  
+  # Math operations (added for trading applications)
+  abs @24;         # Absolute value
+  neg @25;         # Negation
+  clamp @26;       # Clamp to range (useful for position limits)
 }
 
 struct Proof {
