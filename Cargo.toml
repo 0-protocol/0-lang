@@ -34,3 +34,7 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 
 [build-dependencies]
 capnpc = "0.20"
+
+# Crypto for Verification Opcodes (Phase 4 Production)
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"

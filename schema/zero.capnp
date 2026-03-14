@@ -109,11 +109,14 @@ enum Operation {
   oracleRead @30;  # Low-level EVM oracle/contract read via eth_call
   getGasPrice @31; # Fetch EVM gas quote with EIP-1559-compatible fields
 
+  # Cryptographic Data Verification
+  verifySignature @32; # Validate cryptographic oracle proof
+
   # Confidence operations (for agent routing and trust composition)
-  confidenceCombine @32;
-  confidenceThreshold @33;
-  confidenceDecay @34;
-  confidenceBoost @35;
+  confidenceCombine @33;
+  confidenceThreshold @34;
+  confidenceDecay @35;
+  confidenceBoost @36;
 }
 
 struct Proof {

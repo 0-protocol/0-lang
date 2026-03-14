@@ -288,6 +288,7 @@ impl VM {
                         Op::ConfidenceBoost => "Op::ConfidenceBoost",
                         Op::OracleRead => "Op::OracleRead",
                         Op::GetGasPrice => "Op::GetGasPrice",
+                        Op::VerifySignature => "Op::VerifySignature",
                         _ => "Operation",
                     },
                     Some(RuntimeNode::Branch { .. }) => "Branch",
@@ -454,7 +455,9 @@ impl VM {
         let target_hash = if result.used_default {
             default
         } else {
-            &result.selected_route.unwrap().target
+            &result.selected_route.as_ref()
+                .ok_or_else(|| VMError::ExecutionError("Router did not use default but returned no selected route".into()))?
+                .target
         };
 
         self.memory
