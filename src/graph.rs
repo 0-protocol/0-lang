@@ -10,8 +10,14 @@ use std::path::Path;
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 
-use crate::zero_capnp::{graph, node, proof};
+use crate::zero_capnp::{graph, node, proof, stream_ref, tensor, tensor_payload};
+use crate::tensor::{StreamHandle, StreamSource, TensorData};
 use crate::Tensor;
+
+/// Three-color DFS markers for topological sort cycle detection.
+const DFS_WHITE: u8 = 0; // Unvisited
+const DFS_GRAY: u8 = 1;  // In current DFS path (back-edge target → cycle)
+const DFS_BLACK: u8 = 2; // Fully processed
 
 /// A hash-based node identifier (content-addressable)
 pub type NodeHash = Vec<u8>;
@@ -239,6 +245,135 @@ pub struct RuntimeGraph {
     pub proofs: Vec<RuntimeProof>,
 }
 
+/// Deserialize a Tensor from its Cap'n Proto representation.
+///
+/// Backward compatibility: if `typedData` is present, it determines the data type;
+/// otherwise we fall back to the legacy `data @1` float list.
+fn tensor_from_capnp(reader: tensor::Reader) -> Result<Tensor, GraphError> {
+    let shape: Vec<u32> = reader
+        .get_shape()
+        .map_err(|e| GraphError::ParseError(e.to_string()))?
+        .iter()
+        .collect();
+    let confidence = reader.get_confidence();
+
+    if reader.has_typed_data() {
+        let typed = reader
+            .get_typed_data()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?;
+        match typed
+            .which()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?
+        {
+            tensor_payload::FloatData(data) => {
+                let data: Vec<f32> = data
+                    .map_err(|e| GraphError::ParseError(e.to_string()))?
+                    .iter()
+                    .collect();
+                Ok(Tensor::new(shape, data, confidence))
+            }
+            tensor_payload::StringData(list) => {
+                let list = list.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let mut strings = Vec::with_capacity(list.len() as usize);
+                for i in 0..list.len() {
+                    let s = list
+                        .get(i)
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    let s = s
+                        .to_str()
+                        .map_err(|e| GraphError::ParseError(format!("Invalid UTF-8: {}", e)))?;
+                    strings.push(s.to_owned());
+                }
+                Ok(Tensor::with_data(
+                    shape,
+                    TensorData::String(strings),
+                    confidence,
+                ))
+            }
+            tensor_payload::DecimalData(list) => {
+                let list = list.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let mut decimals = Vec::with_capacity(list.len() as usize);
+                for i in 0..list.len() {
+                    let bytes = list
+                        .get(i)
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    if bytes.len() != 16 {
+                        return Err(GraphError::ParseError(format!(
+                            "Decimal data must be 16 bytes, got {}",
+                            bytes.len()
+                        )));
+                    }
+                    let mut buf = [0u8; 16];
+                    buf.copy_from_slice(bytes);
+                    decimals.push(rust_decimal::Decimal::deserialize(buf));
+                }
+                Ok(Tensor::with_data(
+                    shape,
+                    TensorData::Decimal(decimals),
+                    confidence,
+                ))
+            }
+            tensor_payload::StreamRef(ref_reader) => {
+                let ref_reader =
+                    ref_reader.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let id = ref_reader.get_id();
+                let source_type = match ref_reader
+                    .get_source_type()
+                    .which()
+                    .map_err(|e| GraphError::ParseError(e.to_string()))?
+                {
+                    stream_ref::source_type::Websocket(url) => {
+                        let url = url
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::WebSocket { url }
+                    }
+                    stream_ref::source_type::Channel(ch) => {
+                        let channel_id = ch
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::Channel { channel_id }
+                    }
+                    stream_ref::source_type::Event(ev) => {
+                        let event_type = ev
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::Event { event_type }
+                    }
+                };
+                let handle = StreamHandle {
+                    id,
+                    source_type,
+                    buffer: std::sync::Arc::new(tokio::sync::RwLock::new(
+                        std::collections::VecDeque::new(),
+                    )),
+                };
+                Ok(Tensor::from_stream(handle, confidence))
+            }
+        }
+    } else {
+        // Legacy path: read float data from the original `data @1` field
+        let data: Vec<f32> = reader
+            .get_data()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?
+            .iter()
+            .collect();
+        Ok(Tensor::new(shape, data, confidence))
+    }
+}
+
 impl RuntimeGraph {
     /// Load a graph from a .0 file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
@@ -303,21 +438,9 @@ impl RuntimeGraph {
                 .map_err(|e| GraphError::ParseError(e.to_string()))?
             {
                 node::Constant(tensor_reader) => {
-                    let tensor =
+                    let tensor_r =
                         tensor_reader.map_err(|e| GraphError::ParseError(e.to_string()))?;
-                    let shape: Vec<u32> = tensor
-                        .get_shape()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let data: Vec<f32> = tensor
-                        .get_data()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let confidence = tensor.get_confidence();
-
-                    RuntimeNode::Constant(Tensor::new(shape, data, confidence))
+                    RuntimeNode::Constant(tensor_from_capnp(tensor_r)?)
                 }
                 node::Operation(op_reader) => {
                     let op = Op::from_capnp(
@@ -393,19 +516,124 @@ impl RuntimeGraph {
                         .map_err(|e| GraphError::ParseError(format!("Invalid key: {:?}", e)))?;
                     let default_tensor =
                         st.get_default().map_err(|e| GraphError::ParseError(e.to_string()))?;
-                    let shape: Vec<u32> = default_tensor
-                        .get_shape()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let data: Vec<f32> = default_tensor
-                        .get_data()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let confidence = default_tensor.get_confidence();
-                    let default = Tensor::new(shape, data, confidence);
+                    let default = tensor_from_capnp(default_tensor)?;
                     RuntimeNode::State { key, default }
+                }
+                node::Permission(perm) => {
+                    let subject = perm
+                        .get_subject()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let action = perm
+                        .get_action()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let threshold = perm.get_threshold();
+                    let fallback = perm
+                        .get_fallback()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    RuntimeNode::Permission {
+                        subject,
+                        action,
+                        threshold,
+                        fallback,
+                    }
+                }
+                node::Route(rt) => {
+                    let input = rt
+                        .get_input()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let routes_reader = rt
+                        .get_routes()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    let mut routes = Vec::new();
+                    for entry in routes_reader.iter() {
+                        let condition = entry
+                            .get_condition()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .get_hash()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_vec();
+                        let threshold = entry.get_threshold();
+                        let target = entry
+                            .get_target()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .get_hash()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_vec();
+                        let name = entry
+                            .get_name()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        let description = entry
+                            .get_description()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        routes.push(Route {
+                            condition,
+                            threshold,
+                            target,
+                            metadata: RouteMetadata { name, description },
+                        });
+                    }
+                    let default = rt
+                        .get_default()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    RuntimeNode::Route {
+                        input,
+                        routes,
+                        default,
+                    }
+                }
+                node::Timer(tm) => {
+                    let schedule = tm
+                        .get_schedule()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_str()
+                        .map_err(|e| GraphError::ParseError(format!("Invalid UTF-8: {}", e)))?
+                        .to_owned();
+                    let target = tm
+                        .get_target()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let max_concurrent = tm.get_max_concurrent();
+                    let overlap_policy = match tm
+                        .get_overlap_policy()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                    {
+                        crate::zero_capnp::OverlapPolicy::Skip => OverlapPolicy::Skip,
+                        crate::zero_capnp::OverlapPolicy::Queue => OverlapPolicy::Queue,
+                        crate::zero_capnp::OverlapPolicy::Parallel => OverlapPolicy::Parallel,
+                    };
+                    RuntimeNode::Timer {
+                        schedule,
+                        target,
+                        max_concurrent,
+                        overlap_policy,
+                    }
                 }
             };
 
@@ -475,96 +703,79 @@ impl RuntimeGraph {
         })
     }
 
-    /// Get a topological ordering of nodes for execution
-    /// Returns nodes in an order where all dependencies come before their dependents
+    /// Get a topological ordering of nodes for execution.
+    /// Returns nodes in an order where all dependencies come before their dependents.
+    /// Returns `GraphError::CycleDetected` if the graph contains a cycle.
     pub fn topological_sort(&self) -> Result<Vec<NodeHash>, GraphError> {
-        let mut visited: HashMap<NodeHash, bool> = HashMap::new();
+        let mut colors: HashMap<NodeHash, u8> = HashMap::new();
         let mut result: Vec<NodeHash> = Vec::new();
 
-        // Initialize all nodes as not visited
         for hash in self.nodes.keys() {
-            visited.insert(hash.clone(), false);
+            colors.insert(hash.clone(), DFS_WHITE);
         }
 
-        // DFS from each output node
         for output in &self.outputs {
-            self.topo_dfs(output, &mut visited, &mut result)?;
+            Self::topo_dfs_impl(output, &self.nodes, &mut colors, &mut result)?;
         }
 
         Ok(result)
     }
 
-    fn topo_dfs(
-        &self,
+    fn topo_dfs_impl(
         hash: &NodeHash,
-        visited: &mut HashMap<NodeHash, bool>,
+        nodes: &HashMap<NodeHash, RuntimeNode>,
+        colors: &mut HashMap<NodeHash, u8>,
         result: &mut Vec<NodeHash>,
     ) -> Result<(), GraphError> {
-        if *visited.get(hash).unwrap_or(&false) {
-            return Ok(());
+        match colors.get(hash).copied() {
+            Some(DFS_BLACK) => return Ok(()),
+            Some(DFS_GRAY) => return Err(GraphError::CycleDetected),
+            _ => {}
         }
 
-        visited.insert(hash.clone(), true);
+        colors.insert(hash.clone(), DFS_GRAY);
 
-        // Get dependencies and visit them first
-        if let Some(node) = self.nodes.get(hash) {
-            match node {
-                RuntimeNode::Constant(_) => {
-                    // No dependencies
-                }
-                RuntimeNode::State { .. } => {
-                    // State nodes have no dependencies (they're like constants with persistence)
-                }
-                RuntimeNode::Operation { inputs, .. } => {
-                    for input in inputs {
-                        self.topo_dfs(input, visited, result)?;
-                    }
-                }
+        if let Some(node) = nodes.get(hash) {
+            let deps: Vec<&NodeHash> = match node {
+                RuntimeNode::Constant(_) => vec![],
+                RuntimeNode::State { .. } => vec![],
+                RuntimeNode::Operation { inputs, .. } => inputs.iter().collect(),
                 RuntimeNode::Branch {
                     condition,
                     true_branch,
                     false_branch,
                     ..
-                } => {
-                    self.topo_dfs(condition, visited, result)?;
-                    self.topo_dfs(true_branch, visited, result)?;
-                    self.topo_dfs(false_branch, visited, result)?;
-                }
-                RuntimeNode::External { inputs, .. } => {
-                    for input in inputs {
-                        self.topo_dfs(input, visited, result)?;
-                    }
-                }
+                } => vec![condition, true_branch, false_branch],
+                RuntimeNode::External { inputs, .. } => inputs.iter().collect(),
                 RuntimeNode::Permission {
                     subject,
                     action,
                     fallback,
                     ..
-                } => {
-                    self.topo_dfs(subject, visited, result)?;
-                    self.topo_dfs(action, visited, result)?;
-                    self.topo_dfs(fallback, visited, result)?;
-                }
+                } => vec![subject, action, fallback],
                 RuntimeNode::Route {
                     input,
                     routes,
                     default,
                 } => {
-                    self.topo_dfs(input, visited, result)?;
+                    let mut deps = vec![input, default];
                     for route in routes {
-                        self.topo_dfs(&route.condition, visited, result)?;
-                        self.topo_dfs(&route.target, visited, result)?;
+                        deps.push(&route.condition);
+                        deps.push(&route.target);
                     }
-                    self.topo_dfs(default, visited, result)?;
+                    deps
                 }
-                RuntimeNode::Timer { target, .. } => {
-                    self.topo_dfs(target, visited, result)?;
-                }
+                RuntimeNode::Timer { target, .. } => vec![target],
+            };
+
+            for dep in deps {
+                Self::topo_dfs_impl(dep, nodes, colors, result)?;
             }
         } else {
             return Err(GraphError::NodeNotFound(hex::encode(hash)));
         }
 
+        colors.insert(hash.clone(), DFS_BLACK);
         result.push(hash.clone());
         Ok(())
     }
@@ -619,3 +830,176 @@ impl std::fmt::Display for GraphError {
 }
 
 impl std::error::Error for GraphError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::verify::{hash_constant_node, hash_operation_node};
+
+    fn make_linear_graph() -> RuntimeGraph {
+        let tensor_a = Tensor::scalar(1.0, 1.0);
+        let hash_a = hash_constant_node(&tensor_a);
+        let hash_b = hash_operation_node(Op::Identity, std::slice::from_ref(&hash_a));
+        let hash_c = hash_operation_node(Op::Relu, std::slice::from_ref(&hash_b));
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash_a.clone(), RuntimeNode::Constant(tensor_a));
+        nodes.insert(
+            hash_b.clone(),
+            RuntimeNode::Operation {
+                op: Op::Identity,
+                inputs: vec![hash_a.clone()],
+            },
+        );
+        nodes.insert(
+            hash_c.clone(),
+            RuntimeNode::Operation {
+                op: Op::Relu,
+                inputs: vec![hash_b],
+            },
+        );
+
+        RuntimeGraph {
+            nodes,
+            entry_point: hash_a,
+            outputs: vec![hash_c],
+            version: 0,
+            proofs: vec![],
+        }
+    }
+
+    #[test]
+    fn test_topo_sort_cycle_detected() {
+        let hash_a = vec![1u8; 32];
+        let hash_b = vec![2u8; 32];
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            hash_a.clone(),
+            RuntimeNode::Operation {
+                op: Op::Identity,
+                inputs: vec![hash_b.clone()],
+            },
+        );
+        nodes.insert(
+            hash_b.clone(),
+            RuntimeNode::Operation {
+                op: Op::Identity,
+                inputs: vec![hash_a.clone()],
+            },
+        );
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash_a.clone(),
+            outputs: vec![hash_a],
+            version: 0,
+            proofs: vec![],
+        };
+
+        let result = graph.topological_sort();
+        assert!(
+            matches!(result, Err(GraphError::CycleDetected)),
+            "expected CycleDetected, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_topo_sort_self_loop_detected() {
+        let hash_a = vec![3u8; 32];
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            hash_a.clone(),
+            RuntimeNode::Operation {
+                op: Op::Identity,
+                inputs: vec![hash_a.clone()],
+            },
+        );
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash_a.clone(),
+            outputs: vec![hash_a],
+            version: 0,
+            proofs: vec![],
+        };
+
+        let result = graph.topological_sort();
+        assert!(
+            matches!(result, Err(GraphError::CycleDetected)),
+            "expected CycleDetected for self-loop, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_topo_sort_linear_order() {
+        let graph = make_linear_graph();
+        let order = graph.topological_sort().expect("acyclic graph should sort");
+
+        assert_eq!(order.len(), 3);
+        // Dependencies must appear before dependents
+        let pos = |h: &NodeHash| order.iter().position(|x| x == h).unwrap();
+
+        for (hash, node) in &graph.nodes {
+            if let RuntimeNode::Operation { inputs, .. } = node {
+                for input in inputs {
+                    assert!(
+                        pos(input) < pos(hash),
+                        "dependency should precede dependent"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_topo_sort_diamond_no_cycle() {
+        let tensor = Tensor::scalar(1.0, 1.0);
+        let hash_a = hash_constant_node(&tensor);
+        let hash_b = hash_operation_node(Op::Identity, std::slice::from_ref(&hash_a));
+        let hash_c = hash_operation_node(Op::Relu, std::slice::from_ref(&hash_a));
+        let hash_d = hash_operation_node(Op::Add, &[hash_b.clone(), hash_c.clone()]);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash_a.clone(), RuntimeNode::Constant(tensor));
+        nodes.insert(
+            hash_b.clone(),
+            RuntimeNode::Operation {
+                op: Op::Identity,
+                inputs: vec![hash_a.clone()],
+            },
+        );
+        nodes.insert(
+            hash_c.clone(),
+            RuntimeNode::Operation {
+                op: Op::Relu,
+                inputs: vec![hash_a.clone()],
+            },
+        );
+        nodes.insert(
+            hash_d.clone(),
+            RuntimeNode::Operation {
+                op: Op::Add,
+                inputs: vec![hash_b.clone(), hash_c.clone()],
+            },
+        );
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash_a,
+            outputs: vec![hash_d.clone()],
+            version: 0,
+            proofs: vec![],
+        };
+
+        let order = graph.topological_sort().expect("diamond is acyclic");
+        assert_eq!(order.len(), 4);
+
+        let pos = |h: &NodeHash| order.iter().position(|x| x == h).unwrap();
+        assert!(pos(&hash_b) < pos(&hash_d));
+        assert!(pos(&hash_c) < pos(&hash_d));
+    }
+}

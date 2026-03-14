@@ -164,7 +164,13 @@ fn execute_graph(input: &PathBuf, unsafe_mode: bool) -> Result<(), Box<dyn std::
         println!("        Confidence: {:.2}%", tensor.confidence * 100.0);
 
         if tensor.is_scalar() {
-            println!("        Value: {}", tensor.as_scalar());
+            if let Ok(v) = tensor.try_as_scalar() {
+                println!("        Value: {}", v);
+            } else if let Ok(s) = tensor.try_as_scalar_string() {
+                println!("        Value: \"{}\"", s);
+            } else {
+                println!("        Value: <non-numeric scalar>");
+            }
         } else if tensor.numel() <= 10 {
             match &tensor.data {
                 zerolang::TensorData::Float(data) => println!("        Data: {:?}", data),
@@ -278,6 +284,15 @@ fn inspect_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
             node::State(st) => {
                 println!("STATE key={:?}", st.get_key()?);
+            }
+            node::Permission(perm) => {
+                println!("PERMISSION threshold={:.2}", perm.get_threshold());
+            }
+            node::Route(rt) => {
+                println!("ROUTE routes={}", rt.get_routes()?.len());
+            }
+            node::Timer(tm) => {
+                println!("TIMER schedule={:?}", tm.get_schedule()?);
             }
         }
     }

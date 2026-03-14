@@ -77,7 +77,7 @@ fn test_simple_math_conformance() {
     assert_eq!(outputs.len(), 1, "Math graph must produce exactly 1 output");
 
     let output = &outputs[0];
-    assert_eq!(output.as_scalar(), 3.0, "1.0 + 2.0 must equal 3.0");
+    assert_eq!(output.try_as_scalar().unwrap(), 3.0, "1.0 + 2.0 must equal 3.0");
     assert_eq!(output.confidence, 1.0, "Math result confidence must be 1.0");
 }
 
@@ -142,7 +142,7 @@ fn test_tensor_matmul_golden() {
     // Row 0: [1*7+2*9+3*11, 1*8+2*10+3*12] = [58, 64]
     // Row 1: [4*7+5*9+6*11, 4*8+5*10+6*12] = [139, 154]
     assert_eq!(c.shape, vec![2, 2]);
-    assert_eq!(*c.float_data(), vec![58.0, 64.0, 139.0, 154.0]);
+    assert_eq!(*c.try_float_data().unwrap(), vec![58.0, 64.0, 139.0, 154.0]);
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn test_tensor_softmax_golden() {
     let s = t.softmax();
 
     // Verify properties of softmax
-    let float_data = s.float_data();
+    let float_data = s.try_float_data().unwrap();
     let sum: f32 = float_data.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6, "Softmax must sum to 1.0");
 
