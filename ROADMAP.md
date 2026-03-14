@@ -222,3 +222,9 @@ Future: Agents may receive compute credits for completed quests.
 *The roadmap is the territory.*
 
 </div>
+## Phase 4: Production DEX Support (Dependencies for 0-dex)
+To support `0-dex`'s transition to a production Mainnet environment, `0-lang` must implement the following primitive upgrades:
+
+- [ ] **Cryptographic Data Ingestion (`Op::VerifyOracleSignature`)**: Graphs must be able to natively verify signatures (e.g., Pyth Network price feeds) inside the VM. This prevents a local execution environment from spoofing HTTP oracle data.
+- [ ] **Nonce and State Locking (`Op::ReadNonce`, `Op::IncrementNonce`)**: To prevent P2P double-spend races, the VM needs a concept of a strictly increasing sequence number tied to the Agent's identity.
+- [ ] **Zero-Knowledge Execution (`VerifyZK`)**: For ultimate privacy, the VM must eventually support generating and verifying execution proofs (e.g., via Risc0 or SP1) so that intent logic can remain entirely hidden while only the resulting boundary tensors are public.
