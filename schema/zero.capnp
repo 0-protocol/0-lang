@@ -4,13 +4,34 @@
 # Binary serialization format for Agent-to-Agent communication
 # No variable names. No whitespace semantics. Pure logic.
 
+struct StreamRef {
+  # Minimal serializable handle for a streaming data source.
+  id @0 :UInt64;
+  sourceType :union {
+    websocket @1 :Text;         # WebSocket URL
+    channel @2 :Text;           # Internal channel identifier
+    event @3 :Text;             # SSE event type
+  }
+}
+
+struct TensorPayload {
+  # Typed tensor data. Used by Tensor.typedData for non-float payloads.
+  union {
+    floatData @0 :List(Float32);
+    stringData @1 :List(Text);
+    decimalData @2 :List(Data); # 16-byte rust_decimal serialized form per element
+    streamRef @3 :StreamRef;
+  }
+}
+
 struct Tensor {
   # The fundamental data type in Zero.
   # Replaces int, float, bool, string with probabilistic vectors.
   
   shape @0 :List(UInt32);      # Dimensions, e.g. [768] for embedding, [1] for scalar
-  data @1 :List(Float32);      # Flattened tensor data
+  data @1 :List(Float32);      # Legacy float data (kept for backward compat)
   confidence @2 :Float32;      # Meta-confidence in this tensor's validity [0.0, 1.0]
+  typedData @3 :TensorPayload; # Extended typed data; when present overrides data @1
 }
 
 struct NodeId {
@@ -18,6 +39,22 @@ struct NodeId {
   # No variable names - only hashes.
   
   hash @0 :Data;               # sha256 of the node's content
+}
+
+struct RouteEntry {
+  # A single route in a multi-path routing node.
+  condition @0 :NodeId;         # Condition graph (must output confidence scalar)
+  threshold @1 :Float32;        # Minimum confidence to take this route
+  target @2 :NodeId;            # Target node if route matches
+  name @3 :Text;                # Human-readable route name (for tracing)
+  description @4 :Text;         # Route description
+}
+
+enum OverlapPolicy {
+  # Policy for handling overlapping timer executions.
+  skip @0;
+  queue @1;
+  parallel @2;
 }
 
 struct Node {
@@ -54,6 +91,29 @@ struct Node {
     state :group {
       key @10 :Text;            # Unique key for state storage
       default @11 :Tensor;      # Default value if state doesn't exist
+    }
+    
+    # Permission check with confidence threshold
+    permission :group {
+      subject @12 :NodeId;      # Who is requesting (subject tensor)
+      action @13 :NodeId;       # What they want to do (action tensor)
+      threshold @14 :Float32;   # Minimum confidence required to allow
+      fallback @15 :NodeId;     # What to execute if denied
+    }
+    
+    # Multi-path routing with priority ordering
+    route :group {
+      input @16 :NodeId;        # Input to route
+      routes @17 :List(RouteEntry);  # Routes in priority order
+      default @18 :NodeId;      # Default route if none match
+    }
+    
+    # Scheduled execution (cron-like)
+    timer :group {
+      schedule @19 :Text;       # Cron expression (e.g., "*/5 * * * *")
+      target @20 :NodeId;       # Graph to execute when timer fires
+      maxConcurrent @21 :UInt32;     # Maximum concurrent executions
+      overlapPolicy @22 :OverlapPolicy;  # Policy when execution overlaps
     }
   }
 }

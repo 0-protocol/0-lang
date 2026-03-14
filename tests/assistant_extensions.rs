@@ -51,7 +51,7 @@ async fn test_stream_manager_operations() {
     manager.push(&channel_handle, Tensor::scalar(42.0, 1.0)).await.unwrap();
     let result = manager.read(&channel_handle).await;
     assert!(result.is_some());
-    assert_eq!(result.unwrap().as_scalar(), 42.0);
+    assert_eq!(result.unwrap().try_as_scalar().unwrap(), 42.0);
     
     // Close stream
     manager.close(ws_handle.id).await.unwrap();
@@ -255,7 +255,7 @@ fn test_confidence_threshold_operation() {
     let outputs = vm.execute(&graph).unwrap();
     
     // 0.85 >= 0.8, so should return 1.0
-    assert_eq!(outputs[0].as_scalar(), 1.0);
+    assert_eq!(outputs[0].try_as_scalar().unwrap(), 1.0);
 }
 
 // ============================================================================
@@ -288,7 +288,7 @@ fn test_execution_trace_generation() {
     let mut vm = VM::new();
     let (outputs, trace) = vm.execute_with_trace(&graph).unwrap();
     
-    assert_eq!(outputs[0].as_scalar(), 30.0);
+    assert_eq!(outputs[0].try_as_scalar().unwrap(), 30.0);
     assert_eq!(trace.len(), 3); // 2 constants + 1 operation
     assert!(!trace.timestamps.is_empty());
     assert!(!trace.confidences.is_empty());
@@ -412,5 +412,5 @@ fn test_route_node_integration() {
     let outputs = vm.execute(&graph).unwrap();
     
     // Should select route2 (target2) because cond2 has confidence 0.8 >= 0.7
-    assert_eq!(outputs[0].as_scalar(), 200.0);
+    assert_eq!(outputs[0].try_as_scalar().unwrap(), 200.0);
 }

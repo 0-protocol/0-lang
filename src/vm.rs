@@ -531,7 +531,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].relu())
+                input_tensors[0].try_relu().map_err(Self::tensor_err)
             }
             Op::Sigmoid => {
                 if input_tensors.len() != 1 {
@@ -540,7 +540,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].sigmoid())
+                input_tensors[0].try_sigmoid().map_err(Self::tensor_err)
             }
             Op::Tanh => {
                 if input_tensors.len() != 1 {
@@ -549,7 +549,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].tanh())
+                input_tensors[0].try_tanh().map_err(Self::tensor_err)
             }
 
             // Reductions
@@ -560,7 +560,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].sum())
+                input_tensors[0].try_sum().map_err(Self::tensor_err)
             }
             Op::Mean => {
                 if input_tensors.len() != 1 {
@@ -569,7 +569,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].mean())
+                input_tensors[0].try_mean().map_err(Self::tensor_err)
             }
 
             // Special
@@ -604,7 +604,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].softmax())
+                input_tensors[0].try_softmax().map_err(Self::tensor_err)
             }
 
             // Comparison operations
@@ -648,12 +648,11 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                // Gte = NOT Lt
                 let lt_result = input_tensors[0]
                     .lt(input_tensors[1])
-                    .map_err(|e| VMError::TensorError(e.to_string()))?;
-                // Invert: 1.0 - result (since comparison returns 0 or 1)
-                let inverted: Vec<f32> = lt_result.float_data().iter().map(|&v| 1.0 - v).collect();
+                    .map_err(Self::tensor_err)?;
+                let float_data = lt_result.try_float_data().map_err(Self::tensor_err)?;
+                let inverted: Vec<f32> = float_data.iter().map(|&v| 1.0 - v).collect();
                 Ok(Tensor::new(lt_result.shape, inverted, lt_result.confidence))
             }
             Op::Lte => {
@@ -663,11 +662,11 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                // Lte = NOT Gt
                 let gt_result = input_tensors[0]
                     .gt(input_tensors[1])
-                    .map_err(|e| VMError::TensorError(e.to_string()))?;
-                let inverted: Vec<f32> = gt_result.float_data().iter().map(|&v| 1.0 - v).collect();
+                    .map_err(Self::tensor_err)?;
+                let float_data = gt_result.try_float_data().map_err(Self::tensor_err)?;
+                let inverted: Vec<f32> = float_data.iter().map(|&v| 1.0 - v).collect();
                 Ok(Tensor::new(gt_result.shape, inverted, gt_result.confidence))
             }
 
@@ -679,30 +678,21 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                Ok(input_tensors[0].argmax())
+                input_tensors[0].try_argmax().map_err(Self::tensor_err)
             }
 
-            // Min - element-wise minimum of two tensors, or reduction if single input
             Op::Min => {
                 if input_tensors.len() == 1 {
-                    // Reduction: find minimum value
-                    let min_val = input_tensors[0]
-                        .float_data()
-                        .iter()
-                        .cloned()
-                        .fold(f32::INFINITY, f32::min);
+                    let fd = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                    let min_val = fd.iter().cloned().fold(f32::INFINITY, f32::min);
                     Ok(Tensor::scalar(min_val, input_tensors[0].confidence))
                 } else if input_tensors.len() == 2 {
-                    // Element-wise minimum
                     if input_tensors[0].shape != input_tensors[1].shape {
                         return Err(VMError::TensorError("Shape mismatch for Min".to_string()));
                     }
-                    let data: Vec<f32> = input_tensors[0]
-                        .float_data()
-                        .iter()
-                        .zip(input_tensors[1].float_data().iter())
-                        .map(|(&a, &b)| a.min(b))
-                        .collect();
+                    let fd0 = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                    let fd1 = input_tensors[1].try_float_data().map_err(Self::tensor_err)?;
+                    let data: Vec<f32> = fd0.iter().zip(fd1.iter()).map(|(&a, &b)| a.min(b)).collect();
                     let confidence = input_tensors[0].confidence.min(input_tensors[1].confidence);
                     Ok(Tensor::new(input_tensors[0].shape.clone(), data, confidence))
                 } else {
@@ -713,27 +703,18 @@ impl VM {
                 }
             }
 
-            // Max - element-wise maximum of two tensors, or reduction if single input
             Op::Max => {
                 if input_tensors.len() == 1 {
-                    // Reduction: find maximum value
-                    let max_val = input_tensors[0]
-                        .float_data()
-                        .iter()
-                        .cloned()
-                        .fold(f32::NEG_INFINITY, f32::max);
+                    let fd = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                    let max_val = fd.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                     Ok(Tensor::scalar(max_val, input_tensors[0].confidence))
                 } else if input_tensors.len() == 2 {
-                    // Element-wise maximum
                     if input_tensors[0].shape != input_tensors[1].shape {
                         return Err(VMError::TensorError("Shape mismatch for Max".to_string()));
                     }
-                    let data: Vec<f32> = input_tensors[0]
-                        .float_data()
-                        .iter()
-                        .zip(input_tensors[1].float_data().iter())
-                        .map(|(&a, &b)| a.max(b))
-                        .collect();
+                    let fd0 = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                    let fd1 = input_tensors[1].try_float_data().map_err(Self::tensor_err)?;
+                    let data: Vec<f32> = fd0.iter().zip(fd1.iter()).map(|(&a, &b)| a.max(b)).collect();
                     let confidence = input_tensors[0].confidence.min(input_tensors[1].confidence);
                     Ok(Tensor::new(input_tensors[0].shape.clone(), data, confidence))
                 } else {
@@ -746,18 +727,17 @@ impl VM {
 
             // Shape manipulation
             Op::Reshape => {
-                // Reshape needs the target shape as the second input
-                // For now, we'll treat the second tensor's data as shape
                 if input_tensors.len() != 2 {
                     return Err(VMError::WrongInputCount {
                         expected: 2,
                         got: input_tensors.len(),
                     });
                 }
-                let new_shape: Vec<u32> = input_tensors[1].float_data().iter().map(|&x| x as u32).collect();
+                let shape_data = input_tensors[1].try_float_data().map_err(Self::tensor_err)?;
+                let new_shape: Vec<u32> = shape_data.iter().map(|&x| x as u32).collect();
                 input_tensors[0]
                     .reshape(new_shape)
-                    .map_err(|e| VMError::TensorError(e.to_string()))
+                    .map_err(Self::tensor_err)
             }
             Op::Transpose => {
                 if input_tensors.len() != 1 {
@@ -789,9 +769,7 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                // Create a 768-dim embedding from the input tensor's data
-                // This is a placeholder - a real implementation might use a lookup table
-                let float_data = input_tensors[0].float_data();
+                let float_data = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
                 let input_len = float_data.len().min(768);
                 let mut embedding = vec![0.0f32; 768];
                 embedding[..input_len].copy_from_slice(&float_data[..input_len]);
@@ -814,7 +792,8 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                let data: Vec<f32> = input_tensors[0].float_data().iter().map(|&v| v.abs()).collect();
+                let fd = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                let data: Vec<f32> = fd.iter().map(|&v| v.abs()).collect();
                 Ok(Tensor::new(
                     input_tensors[0].shape.clone(),
                     data,
@@ -830,7 +809,8 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                let data: Vec<f32> = input_tensors[0].float_data().iter().map(|&v| -v).collect();
+                let fd = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                let data: Vec<f32> = fd.iter().map(|&v| -v).collect();
                 Ok(Tensor::new(
                     input_tensors[0].shape.clone(),
                     data,
@@ -847,13 +827,10 @@ impl VM {
                         got: input_tensors.len(),
                     });
                 }
-                let min_val = input_tensors[1].as_scalar();
-                let max_val = input_tensors[2].as_scalar();
-                let data: Vec<f32> = input_tensors[0]
-                    .float_data()
-                    .iter()
-                    .map(|&v| v.clamp(min_val, max_val))
-                    .collect();
+                let min_val = input_tensors[1].try_as_scalar().map_err(Self::tensor_err)?;
+                let max_val = input_tensors[2].try_as_scalar().map_err(Self::tensor_err)?;
+                let fd = input_tensors[0].try_float_data().map_err(Self::tensor_err)?;
+                let data: Vec<f32> = fd.iter().map(|&v| v.clamp(min_val, max_val)).collect();
                 Ok(Tensor::new(
                     input_tensors[0].shape.clone(),
                     data,
@@ -912,7 +889,7 @@ impl VM {
                 let address = Self::require_string_scalar(input_tensors[1], "OracleRead address")?;
                 let call_data = Self::require_string_scalar(input_tensors[2], "OracleRead call_data")?;
                 let decimals = if let Some(tensor) = input_tensors.get(3) {
-                    tensor.as_scalar().max(0.0) as u32
+                    tensor.try_as_scalar().map_err(Self::tensor_err)?.max(0.0) as u32
                 } else {
                     0
                 };
@@ -932,8 +909,14 @@ impl VM {
                     });
                 }
                 let rpc_url = Self::require_string_scalar(input_tensors[0], "GetGasPrice rpc_url")?;
-                let priority_fee_gwei = input_tensors.get(1).map(|tensor| tensor.as_scalar());
-                let safety_multiplier = input_tensors.get(2).map(|tensor| tensor.as_scalar());
+                let priority_fee_gwei = match input_tensors.get(1) {
+                    Some(t) => Some(t.try_as_scalar().map_err(Self::tensor_err)?),
+                    None => None,
+                };
+                let safety_multiplier = match input_tensors.get(2) {
+                    Some(t) => Some(t.try_as_scalar().map_err(Self::tensor_err)?),
+                    None => None,
+                };
                 let json = get_gas_price_json(rpc_url, priority_fee_gwei, safety_multiplier)
                     .map_err(VMError::Web3Error)?;
                 Ok(Tensor::scalar_string(
@@ -955,41 +938,35 @@ impl VM {
             }
 
             Op::ConfidenceThreshold => {
-                // Output 1.0 if confidence >= threshold, 0.0 otherwise
-                // Inputs: [value_tensor, threshold_tensor]
                 if input_tensors.len() != 2 {
                     return Err(VMError::WrongInputCount {
                         expected: 2,
                         got: input_tensors.len(),
                     });
                 }
-                let threshold = input_tensors[1].as_scalar();
+                let threshold = input_tensors[1].try_as_scalar().map_err(Self::tensor_err)?;
                 self.execute_confidence_threshold(input_tensors[0], threshold)
             }
 
             Op::ConfidenceDecay => {
-                // Reduce confidence over time
-                // Inputs: [value_tensor, decay_factor_tensor]
                 if input_tensors.len() != 2 {
                     return Err(VMError::WrongInputCount {
                         expected: 2,
                         got: input_tensors.len(),
                     });
                 }
-                let decay_factor = input_tensors[1].as_scalar();
+                let decay_factor = input_tensors[1].try_as_scalar().map_err(Self::tensor_err)?;
                 self.execute_confidence_decay(input_tensors[0], decay_factor)
             }
 
             Op::ConfidenceBoost => {
-                // Increase confidence based on input factor
-                // Inputs: [value_tensor, boost_factor_tensor]
                 if input_tensors.len() != 2 {
                     return Err(VMError::WrongInputCount {
                         expected: 2,
                         got: input_tensors.len(),
                     });
                 }
-                let boost_factor = input_tensors[1].as_scalar();
+                let boost_factor = input_tensors[1].try_as_scalar().map_err(Self::tensor_err)?;
                 self.execute_confidence_boost(input_tensors[0], boost_factor)
             }
         }
@@ -1057,6 +1034,10 @@ impl VM {
         ))
     }
 
+    fn tensor_err(e: crate::tensor::TensorError) -> VMError {
+        VMError::TensorError(e.to_string())
+    }
+
     fn require_string_scalar<'a>(tensor: &'a Tensor, label: &str) -> Result<&'a str, VMError> {
         match &tensor.data {
             TensorData::String(values) if tensor.is_scalar() && !values.is_empty() => Ok(&values[0]),
@@ -1112,11 +1093,9 @@ impl VM {
             .get(condition)
             .ok_or_else(|| VMError::NodeNotComputed(hex::encode(condition)))?;
 
-        if !cond_tensor.is_scalar() {
-            return Err(VMError::BranchConditionNotScalar);
-        }
-
-        let cond_value = cond_tensor.as_scalar();
+        let cond_value = cond_tensor
+            .try_as_scalar()
+            .map_err(|_| VMError::BranchConditionNotScalar)?;
 
         // Choose branch based on threshold
         let branch_hash = if cond_value >= threshold {
@@ -1269,7 +1248,7 @@ mod tests {
         let outputs = vm.execute(&graph).unwrap();
 
         assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].as_scalar(), 42.0);
+        assert_eq!(outputs[0].try_as_scalar().unwrap(), 42.0);
     }
 
     #[test]
@@ -1305,7 +1284,7 @@ mod tests {
         let outputs = vm.execute(&graph).unwrap();
 
         assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].as_scalar(), 30.0);
+        assert_eq!(outputs[0].try_as_scalar().unwrap(), 30.0);
         assert_eq!(outputs[0].confidence, 0.9); // min(1.0, 0.9)
     }
 }
