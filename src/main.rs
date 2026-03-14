@@ -285,6 +285,15 @@ fn inspect_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             node::State(st) => {
                 println!("STATE key={:?}", st.get_key()?);
             }
+            node::Permission(perm) => {
+                println!("PERMISSION threshold={:.2}", perm.get_threshold());
+            }
+            node::Route(rt) => {
+                println!("ROUTE routes={}", rt.get_routes()?.len());
+            }
+            node::Timer(tm) => {
+                println!("TIMER schedule={:?}", tm.get_schedule()?);
+            }
         }
     }
     println!("└────────────────────────────────────────────────────────────────");

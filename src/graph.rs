@@ -10,7 +10,8 @@ use std::path::Path;
 use capnp::message::ReaderOptions;
 use capnp::serialize;
 
-use crate::zero_capnp::{graph, node, proof};
+use crate::zero_capnp::{graph, node, proof, stream_ref, tensor, tensor_payload};
+use crate::tensor::{StreamHandle, StreamSource, TensorData};
 use crate::Tensor;
 
 /// Three-color DFS markers for topological sort cycle detection.
@@ -244,6 +245,135 @@ pub struct RuntimeGraph {
     pub proofs: Vec<RuntimeProof>,
 }
 
+/// Deserialize a Tensor from its Cap'n Proto representation.
+///
+/// Backward compatibility: if `typedData` is present, it determines the data type;
+/// otherwise we fall back to the legacy `data @1` float list.
+fn tensor_from_capnp(reader: tensor::Reader) -> Result<Tensor, GraphError> {
+    let shape: Vec<u32> = reader
+        .get_shape()
+        .map_err(|e| GraphError::ParseError(e.to_string()))?
+        .iter()
+        .collect();
+    let confidence = reader.get_confidence();
+
+    if reader.has_typed_data() {
+        let typed = reader
+            .get_typed_data()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?;
+        match typed
+            .which()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?
+        {
+            tensor_payload::FloatData(data) => {
+                let data: Vec<f32> = data
+                    .map_err(|e| GraphError::ParseError(e.to_string()))?
+                    .iter()
+                    .collect();
+                Ok(Tensor::new(shape, data, confidence))
+            }
+            tensor_payload::StringData(list) => {
+                let list = list.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let mut strings = Vec::with_capacity(list.len() as usize);
+                for i in 0..list.len() {
+                    let s = list
+                        .get(i)
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    let s = s
+                        .to_str()
+                        .map_err(|e| GraphError::ParseError(format!("Invalid UTF-8: {}", e)))?;
+                    strings.push(s.to_owned());
+                }
+                Ok(Tensor::with_data(
+                    shape,
+                    TensorData::String(strings),
+                    confidence,
+                ))
+            }
+            tensor_payload::DecimalData(list) => {
+                let list = list.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let mut decimals = Vec::with_capacity(list.len() as usize);
+                for i in 0..list.len() {
+                    let bytes = list
+                        .get(i)
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    if bytes.len() != 16 {
+                        return Err(GraphError::ParseError(format!(
+                            "Decimal data must be 16 bytes, got {}",
+                            bytes.len()
+                        )));
+                    }
+                    let mut buf = [0u8; 16];
+                    buf.copy_from_slice(bytes);
+                    decimals.push(rust_decimal::Decimal::deserialize(buf));
+                }
+                Ok(Tensor::with_data(
+                    shape,
+                    TensorData::Decimal(decimals),
+                    confidence,
+                ))
+            }
+            tensor_payload::StreamRef(ref_reader) => {
+                let ref_reader =
+                    ref_reader.map_err(|e| GraphError::ParseError(e.to_string()))?;
+                let id = ref_reader.get_id();
+                let source_type = match ref_reader
+                    .get_source_type()
+                    .which()
+                    .map_err(|e| GraphError::ParseError(e.to_string()))?
+                {
+                    stream_ref::source_type::Websocket(url) => {
+                        let url = url
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::WebSocket { url }
+                    }
+                    stream_ref::source_type::Channel(ch) => {
+                        let channel_id = ch
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::Channel { channel_id }
+                    }
+                    stream_ref::source_type::Event(ev) => {
+                        let event_type = ev
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        StreamSource::Event { event_type }
+                    }
+                };
+                let handle = StreamHandle {
+                    id,
+                    source_type,
+                    buffer: std::sync::Arc::new(tokio::sync::RwLock::new(
+                        std::collections::VecDeque::new(),
+                    )),
+                };
+                Ok(Tensor::from_stream(handle, confidence))
+            }
+        }
+    } else {
+        // Legacy path: read float data from the original `data @1` field
+        let data: Vec<f32> = reader
+            .get_data()
+            .map_err(|e| GraphError::ParseError(e.to_string()))?
+            .iter()
+            .collect();
+        Ok(Tensor::new(shape, data, confidence))
+    }
+}
+
 impl RuntimeGraph {
     /// Load a graph from a .0 file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
@@ -308,21 +438,9 @@ impl RuntimeGraph {
                 .map_err(|e| GraphError::ParseError(e.to_string()))?
             {
                 node::Constant(tensor_reader) => {
-                    let tensor =
+                    let tensor_r =
                         tensor_reader.map_err(|e| GraphError::ParseError(e.to_string()))?;
-                    let shape: Vec<u32> = tensor
-                        .get_shape()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let data: Vec<f32> = tensor
-                        .get_data()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let confidence = tensor.get_confidence();
-
-                    RuntimeNode::Constant(Tensor::new(shape, data, confidence))
+                    RuntimeNode::Constant(tensor_from_capnp(tensor_r)?)
                 }
                 node::Operation(op_reader) => {
                     let op = Op::from_capnp(
@@ -398,19 +516,124 @@ impl RuntimeGraph {
                         .map_err(|e| GraphError::ParseError(format!("Invalid key: {:?}", e)))?;
                     let default_tensor =
                         st.get_default().map_err(|e| GraphError::ParseError(e.to_string()))?;
-                    let shape: Vec<u32> = default_tensor
-                        .get_shape()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let data: Vec<f32> = default_tensor
-                        .get_data()
-                        .map_err(|e| GraphError::ParseError(e.to_string()))?
-                        .iter()
-                        .collect();
-                    let confidence = default_tensor.get_confidence();
-                    let default = Tensor::new(shape, data, confidence);
+                    let default = tensor_from_capnp(default_tensor)?;
                     RuntimeNode::State { key, default }
+                }
+                node::Permission(perm) => {
+                    let subject = perm
+                        .get_subject()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let action = perm
+                        .get_action()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let threshold = perm.get_threshold();
+                    let fallback = perm
+                        .get_fallback()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    RuntimeNode::Permission {
+                        subject,
+                        action,
+                        threshold,
+                        fallback,
+                    }
+                }
+                node::Route(rt) => {
+                    let input = rt
+                        .get_input()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let routes_reader = rt
+                        .get_routes()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?;
+                    let mut routes = Vec::new();
+                    for entry in routes_reader.iter() {
+                        let condition = entry
+                            .get_condition()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .get_hash()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_vec();
+                        let threshold = entry.get_threshold();
+                        let target = entry
+                            .get_target()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .get_hash()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_vec();
+                        let name = entry
+                            .get_name()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        let description = entry
+                            .get_description()
+                            .map_err(|e| GraphError::ParseError(e.to_string()))?
+                            .to_str()
+                            .map_err(|e| {
+                                GraphError::ParseError(format!("Invalid UTF-8: {}", e))
+                            })?
+                            .to_owned();
+                        routes.push(Route {
+                            condition,
+                            threshold,
+                            target,
+                            metadata: RouteMetadata { name, description },
+                        });
+                    }
+                    let default = rt
+                        .get_default()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    RuntimeNode::Route {
+                        input,
+                        routes,
+                        default,
+                    }
+                }
+                node::Timer(tm) => {
+                    let schedule = tm
+                        .get_schedule()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_str()
+                        .map_err(|e| GraphError::ParseError(format!("Invalid UTF-8: {}", e)))?
+                        .to_owned();
+                    let target = tm
+                        .get_target()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .get_hash()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                        .to_vec();
+                    let max_concurrent = tm.get_max_concurrent();
+                    let overlap_policy = match tm
+                        .get_overlap_policy()
+                        .map_err(|e| GraphError::ParseError(e.to_string()))?
+                    {
+                        crate::zero_capnp::OverlapPolicy::Skip => OverlapPolicy::Skip,
+                        crate::zero_capnp::OverlapPolicy::Queue => OverlapPolicy::Queue,
+                        crate::zero_capnp::OverlapPolicy::Parallel => OverlapPolicy::Parallel,
+                    };
+                    RuntimeNode::Timer {
+                        schedule,
+                        target,
+                        max_concurrent,
+                        overlap_policy,
+                    }
                 }
             };
 
