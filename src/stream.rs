@@ -361,8 +361,8 @@ mod tests {
         let r2 = manager.read(&handle).await.unwrap();
         let r3 = manager.read(&handle).await;
 
-        assert_eq!(r1.as_scalar(), 1.0);
-        assert_eq!(r2.as_scalar(), 2.0);
+        assert_eq!(r1.try_as_scalar().unwrap(), 1.0);
+        assert_eq!(r2.try_as_scalar().unwrap(), 2.0);
         assert!(r3.is_none());
     }
 

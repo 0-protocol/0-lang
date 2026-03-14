@@ -86,6 +86,16 @@ impl TensorData {
         matches!(self, TensorData::Stream(_))
     }
 
+    /// Human-readable name of the variant (for error messages)
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            TensorData::Float(_) => "Float",
+            TensorData::String(_) => "String",
+            TensorData::Decimal(_) => "Decimal",
+            TensorData::Stream(_) => "Stream",
+        }
+    }
+
     /// Get as float data (returns None if not float type)
     pub fn as_float(&self) -> Option<&Vec<f32>> {
         match self {
@@ -138,12 +148,16 @@ pub struct Tensor {
 impl Tensor {
     /// Get float data directly (for backwards compatibility)
     /// Panics if the tensor contains non-float data
+    #[deprecated(note = "use try_float_data() to avoid panics in production")]
     pub fn float_data(&self) -> &Vec<f32> {
-        self.data.as_float().expect("Tensor does not contain float data")
+        self.data
+            .as_float()
+            .expect("Tensor does not contain float data")
     }
 
     /// Get mutable float data directly (for backwards compatibility)
     /// Panics if the tensor contains non-float data
+    #[deprecated(note = "use try_float_data_mut() to avoid panics in production")]
     pub fn float_data_mut(&mut self) -> &mut Vec<f32> {
         match &mut self.data {
             TensorData::Float(v) => v,
@@ -282,6 +296,7 @@ impl Tensor {
     }
 
     /// Get scalar value (panics if not a scalar or not float)
+    #[deprecated(note = "use try_as_scalar() to avoid panics in production")]
     pub fn as_scalar(&self) -> f32 {
         assert!(self.is_scalar(), "Tensor is not a scalar");
         match &self.data {
@@ -296,6 +311,7 @@ impl Tensor {
     }
 
     /// Get scalar string value (panics if not a scalar or not string)
+    #[deprecated(note = "use try_as_scalar_string() to avoid panics in production")]
     pub fn as_scalar_string(&self) -> &str {
         assert!(self.is_scalar(), "Tensor is not a scalar");
         match &self.data {
@@ -305,6 +321,7 @@ impl Tensor {
     }
 
     /// Get scalar decimal value (panics if not a scalar or not decimal)
+    #[deprecated(note = "use try_as_scalar_decimal() to avoid panics in production")]
     pub fn as_scalar_decimal(&self) -> Decimal {
         assert!(self.is_scalar(), "Tensor is not a scalar");
         match &self.data {
@@ -313,6 +330,167 @@ impl Tensor {
             TensorData::String(_) => panic!("Cannot get decimal from string tensor"),
             TensorData::Stream(_) => panic!("Cannot get decimal from stream tensor"),
         }
+    }
+
+    // ── Fallible accessors (panic-free) ────────────────────────────
+
+    /// Fallible version of `float_data`. Returns the inner float slice
+    /// or `TensorError::TypeMismatch` when the tensor holds another variant.
+    pub fn try_float_data(&self) -> Result<&Vec<f32>, TensorError> {
+        self.data.as_float().ok_or(TensorError::TypeMismatch {
+            expected: "Float",
+            got: self.data.type_name(),
+        })
+    }
+
+    /// Fallible version of `float_data_mut`.
+    pub fn try_float_data_mut(&mut self) -> Result<&mut Vec<f32>, TensorError> {
+        let type_name = self.data.type_name();
+        match &mut self.data {
+            TensorData::Float(v) => Ok(v),
+            _ => Err(TensorError::TypeMismatch {
+                expected: "Float",
+                got: type_name,
+            }),
+        }
+    }
+
+    /// Fallible version of `as_scalar`. Accepts Float or Decimal data;
+    /// returns `TensorError::NotScalar` or `TensorError::TypeMismatch`.
+    pub fn try_as_scalar(&self) -> Result<f32, TensorError> {
+        if !self.is_scalar() {
+            return Err(TensorError::NotScalar {
+                shape: self.shape.clone(),
+            });
+        }
+        match &self.data {
+            TensorData::Float(v) => Ok(v[0]),
+            TensorData::Decimal(v) => {
+                use rust_decimal::prelude::ToPrimitive;
+                Ok(v[0].to_f32().unwrap_or(0.0))
+            }
+            other => Err(TensorError::TypeMismatch {
+                expected: "Float or Decimal",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Fallible version of `as_scalar_string`.
+    pub fn try_as_scalar_string(&self) -> Result<&str, TensorError> {
+        if !self.is_scalar() {
+            return Err(TensorError::NotScalar {
+                shape: self.shape.clone(),
+            });
+        }
+        match &self.data {
+            TensorData::String(v) => Ok(&v[0]),
+            other => Err(TensorError::TypeMismatch {
+                expected: "String",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Fallible version of `as_scalar_decimal`.
+    pub fn try_as_scalar_decimal(&self) -> Result<Decimal, TensorError> {
+        if !self.is_scalar() {
+            return Err(TensorError::NotScalar {
+                shape: self.shape.clone(),
+            });
+        }
+        match &self.data {
+            TensorData::Decimal(v) => Ok(v[0]),
+            TensorData::Float(v) => Ok(Decimal::from_f32_retain(v[0]).unwrap_or(Decimal::ZERO)),
+            other => Err(TensorError::TypeMismatch {
+                expected: "Decimal or Float",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    // ── Fallible tensor operations (panic-free) ────────────────────
+
+    /// Fallible version of `sum`.
+    pub fn try_sum(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let total: f32 = float_data.iter().sum();
+        Ok(Tensor::scalar(total, self.confidence))
+    }
+
+    /// Fallible version of `mean`.
+    pub fn try_mean(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let total: f32 = float_data.iter().sum();
+        let count = float_data.len() as f32;
+        Ok(Tensor::scalar(total / count, self.confidence))
+    }
+
+    /// Fallible version of `relu`.
+    pub fn try_relu(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let data: Vec<f32> = float_data.iter().map(|&x| x.max(0.0)).collect();
+        Ok(Tensor {
+            shape: self.shape.clone(),
+            data: TensorData::Float(data),
+            confidence: self.confidence,
+        })
+    }
+
+    /// Fallible version of `sigmoid`.
+    pub fn try_sigmoid(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let data: Vec<f32> = float_data
+            .iter()
+            .map(|&x| 1.0 / (1.0 + (-x).exp()))
+            .collect();
+        Ok(Tensor {
+            shape: self.shape.clone(),
+            data: TensorData::Float(data),
+            confidence: self.confidence,
+        })
+    }
+
+    /// Fallible version of `tanh`.
+    pub fn try_tanh(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let data: Vec<f32> = float_data.iter().map(|&x| x.tanh()).collect();
+        Ok(Tensor {
+            shape: self.shape.clone(),
+            data: TensorData::Float(data),
+            confidence: self.confidence,
+        })
+    }
+
+    /// Fallible version of `softmax`.
+    pub fn try_softmax(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let max_val = float_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let exp_data: Vec<f32> = float_data.iter().map(|&x| (x - max_val).exp()).collect();
+        let sum: f32 = exp_data.iter().sum();
+        let data: Vec<f32> = exp_data.iter().map(|&x| x / sum).collect();
+        Ok(Tensor {
+            shape: self.shape.clone(),
+            data: TensorData::Float(data),
+            confidence: self.confidence,
+        })
+    }
+
+    /// Fallible version of `argmax`.
+    pub fn try_argmax(&self) -> Result<Tensor, TensorError> {
+        let float_data = self.try_float_data()?;
+        let (max_idx, _) =
+            float_data
+                .iter()
+                .enumerate()
+                .fold((0, f32::NEG_INFINITY), |(max_i, max_v), (i, &v)| {
+                    if v > max_v {
+                        (i, v)
+                    } else {
+                        (max_i, max_v)
+                    }
+                });
+        Ok(Tensor::scalar(max_idx as f32, self.confidence))
     }
 
     /// Compute confidence propagation for binary operations
@@ -395,14 +573,14 @@ impl Tensor {
 
     /// Sum all elements, returning a scalar
     pub fn sum(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let total: f32 = float_data.iter().sum();
         Tensor::scalar(total, self.confidence)
     }
 
     /// Mean of all elements, returning a scalar
     pub fn mean(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let total: f32 = float_data.iter().sum();
         let count = float_data.len() as f32;
         Tensor::scalar(total / count, self.confidence)
@@ -410,7 +588,7 @@ impl Tensor {
 
     /// ReLU activation: max(0, x)
     pub fn relu(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let data: Vec<f32> = float_data.iter().map(|&x| x.max(0.0)).collect();
         Tensor {
             shape: self.shape.clone(),
@@ -421,7 +599,7 @@ impl Tensor {
 
     /// Sigmoid activation: 1 / (1 + exp(-x))
     pub fn sigmoid(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let data: Vec<f32> = float_data
             .iter()
             .map(|&x| 1.0 / (1.0 + (-x).exp()))
@@ -435,7 +613,7 @@ impl Tensor {
 
     /// Tanh activation
     pub fn tanh(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let data: Vec<f32> = float_data.iter().map(|&x| x.tanh()).collect();
         Tensor {
             shape: self.shape.clone(),
@@ -446,7 +624,7 @@ impl Tensor {
 
     /// Softmax activation (across all elements)
     pub fn softmax(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         // Find max for numerical stability
         let max_val = float_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let exp_data: Vec<f32> = float_data.iter().map(|&x| (x - max_val).exp()).collect();
@@ -461,7 +639,7 @@ impl Tensor {
 
     /// Argmax - returns index of maximum value as a scalar
     pub fn argmax(&self) -> Tensor {
-        let float_data = self.float_data();
+        let float_data = self.data.as_float().expect("requires float tensor");
         let (max_idx, _) =
             float_data
                 .iter()
@@ -510,8 +688,8 @@ impl Tensor {
             });
         }
 
-        let self_data = self.float_data();
-        let other_data = other.float_data();
+        let self_data = self.try_float_data()?;
+        let other_data = other.try_float_data()?;
 
         let m = self.shape[0] as usize;
         let k1 = self.shape[1] as usize;
@@ -571,7 +749,7 @@ impl Tensor {
             });
         }
 
-        let float_data = self.float_data();
+        let float_data = self.try_float_data()?;
         let rows = self.shape[0] as usize;
         let cols = self.shape[1] as usize;
         let mut result = vec![0.0f32; rows * cols];
@@ -621,7 +799,7 @@ impl Tensor {
         let mut first_dim = 0u32;
 
         for t in tensors {
-            data.extend(t.float_data());
+            data.extend(t.try_float_data()?);
             first_dim += t.shape[0];
             min_confidence = min_confidence.min(t.confidence);
         }
@@ -711,6 +889,10 @@ impl Div for Tensor {
 pub enum TensorError {
     ShapeMismatch { expected: Vec<u32>, got: Vec<u32> },
     InvalidShape { reason: String },
+    /// The tensor holds a different data type than requested.
+    TypeMismatch { expected: &'static str, got: &'static str },
+    /// A scalar was required but the tensor has a non-[1] shape.
+    NotScalar { shape: Vec<u32> },
 }
 
 impl std::fmt::Display for TensorError {
@@ -721,6 +903,12 @@ impl std::fmt::Display for TensorError {
             }
             TensorError::InvalidShape { reason } => {
                 write!(f, "Invalid shape: {}", reason)
+            }
+            TensorError::TypeMismatch { expected, got } => {
+                write!(f, "Type mismatch: expected {}, got {}", expected, got)
+            }
+            TensorError::NotScalar { shape } => {
+                write!(f, "Expected scalar (shape [1]), got shape {:?}", shape)
             }
         }
     }
@@ -734,9 +922,9 @@ mod tests {
 
     #[test]
     fn test_scalar_creation() {
-        let t = Tensor::scalar(3.14, 1.0);
+        let t = Tensor::scalar(3.5, 1.0);
         assert_eq!(t.shape, vec![1]);
-        assert_eq!(*t.float_data(), vec![3.14]);
+        assert_eq!(*t.try_float_data().unwrap(), vec![3.5]);
         assert!(t.is_scalar());
     }
 
@@ -745,7 +933,7 @@ mod tests {
         let a = Tensor::scalar(1.0, 1.0);
         let b = Tensor::scalar(2.0, 0.9);
         let c = a + b;
-        assert_eq!(c.as_scalar(), 3.0);
+        assert_eq!(c.try_as_scalar().unwrap(), 3.0);
         assert_eq!(c.confidence, 0.9); // min(1.0, 0.9)
     }
 
@@ -762,7 +950,7 @@ mod tests {
         let a = Tensor::from_vec(vec![1.0, 2.0, 3.0], 1.0);
         let b = Tensor::from_vec(vec![4.0, 5.0, 6.0], 1.0);
         let c = a + b;
-        assert_eq!(*c.float_data(), vec![5.0, 7.0, 9.0]);
+        assert_eq!(*c.try_float_data().unwrap(), vec![5.0, 7.0, 9.0]);
     }
 
     #[test]
@@ -770,21 +958,21 @@ mod tests {
         let scalar = Tensor::scalar(2.0, 1.0);
         let vec = Tensor::from_vec(vec![1.0, 2.0, 3.0], 1.0);
         let result = scalar.checked_mul(&vec).unwrap();
-        assert_eq!(*result.float_data(), vec![2.0, 4.0, 6.0]);
+        assert_eq!(*result.try_float_data().unwrap(), vec![2.0, 4.0, 6.0]);
     }
 
     #[test]
     fn test_relu() {
         let t = Tensor::from_vec(vec![-1.0, 0.0, 1.0, 2.0], 1.0);
         let r = t.relu();
-        assert_eq!(*r.float_data(), vec![0.0, 0.0, 1.0, 2.0]);
+        assert_eq!(*r.try_float_data().unwrap(), vec![0.0, 0.0, 1.0, 2.0]);
     }
 
     #[test]
     fn test_sum() {
         let t = Tensor::from_vec(vec![1.0, 2.0, 3.0, 4.0], 0.95);
         let s = t.sum();
-        assert_eq!(s.as_scalar(), 10.0);
+        assert_eq!(s.try_as_scalar().unwrap(), 10.0);
         assert_eq!(s.confidence, 0.95);
     }
 
@@ -793,18 +981,18 @@ mod tests {
         let t = Tensor::from_vec(vec![1.0, 2.0, 3.0], 1.0);
         let s = t.softmax();
         // Softmax values should sum to 1
-        let sum: f32 = s.float_data().iter().sum();
+        let sum: f32 = s.try_float_data().unwrap().iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
         // Higher input = higher output
-        assert!(s.float_data()[2] > s.float_data()[1]);
-        assert!(s.float_data()[1] > s.float_data()[0]);
+        assert!(s.try_float_data().unwrap()[2] > s.try_float_data().unwrap()[1]);
+        assert!(s.try_float_data().unwrap()[1] > s.try_float_data().unwrap()[0]);
     }
 
     #[test]
     fn test_argmax() {
         let t = Tensor::from_vec(vec![1.0, 5.0, 3.0, 2.0], 0.9);
         let idx = t.argmax();
-        assert_eq!(idx.as_scalar(), 1.0); // Index of 5.0
+        assert_eq!(idx.try_as_scalar().unwrap(), 1.0); // Index of 5.0
         assert_eq!(idx.confidence, 0.9);
     }
 
@@ -818,7 +1006,7 @@ mod tests {
         assert_eq!(c.shape, vec![2, 2]);
         // [1*1+2*3+3*5, 1*2+2*4+3*6] = [22, 28]
         // [4*1+5*3+6*5, 4*2+5*4+6*6] = [49, 64]
-        assert_eq!(*c.float_data(), vec![22.0, 28.0, 49.0, 64.0]);
+        assert_eq!(*c.try_float_data().unwrap(), vec![22.0, 28.0, 49.0, 64.0]);
         assert_eq!(c.confidence, 0.9);
     }
 
@@ -837,7 +1025,7 @@ mod tests {
         assert_eq!(r.shape, vec![3, 2]);
         // Original: [[1,2,3], [4,5,6]]
         // Transposed: [[1,4], [2,5], [3,6]]
-        assert_eq!(*r.float_data(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        assert_eq!(*r.try_float_data().unwrap(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
     }
 
     #[test]
@@ -847,7 +1035,7 @@ mod tests {
         let c = Tensor::concat(&[&a, &b]).unwrap();
 
         assert_eq!(c.shape, vec![3, 3]);
-        assert_eq!(*c.float_data(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        assert_eq!(*c.try_float_data().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
         assert_eq!(c.confidence, 0.8); // min(1.0, 0.8)
     }
 
@@ -857,13 +1045,13 @@ mod tests {
         let b = Tensor::from_vec(vec![2.0, 2.0, 1.0], 1.0);
 
         let eq = a.eq(&b).unwrap();
-        assert_eq!(*eq.float_data(), vec![0.0, 1.0, 0.0]);
+        assert_eq!(*eq.try_float_data().unwrap(), vec![0.0, 1.0, 0.0]);
 
         let gt = a.gt(&b).unwrap();
-        assert_eq!(*gt.float_data(), vec![0.0, 0.0, 1.0]);
+        assert_eq!(*gt.try_float_data().unwrap(), vec![0.0, 0.0, 1.0]);
 
         let lt = a.lt(&b).unwrap();
-        assert_eq!(*lt.float_data(), vec![1.0, 0.0, 0.0]);
+        assert_eq!(*lt.try_float_data().unwrap(), vec![1.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -904,7 +1092,151 @@ mod tests {
     fn test_confidence_scalar() {
         let t = Tensor::confidence_scalar(0.85);
         assert!(t.is_scalar());
-        assert_eq!(t.as_scalar(), 0.85);
+        assert_eq!(t.try_as_scalar().unwrap(), 0.85);
         assert_eq!(t.confidence(), 0.85);
+    }
+
+    // ── Fallible-accessor tests (P0-2) ────────────────────────────
+
+    #[test]
+    fn test_try_float_data_on_string_tensor() {
+        let t = Tensor::scalar_string("hello".into(), 1.0);
+        let err = t.try_float_data().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "Float", got: "String" }));
+    }
+
+    #[test]
+    fn test_try_float_data_on_decimal_tensor() {
+        let t = Tensor::scalar_decimal(Decimal::new(100, 0), 1.0);
+        let err = t.try_float_data().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "Float", got: "Decimal" }));
+    }
+
+    #[test]
+    fn test_try_float_data_on_stream_tensor() {
+        let handle = StreamHandle {
+            id: 1,
+            source_type: StreamSource::Channel { channel_id: "ch".into() },
+            buffer: Arc::new(RwLock::new(VecDeque::new())),
+        };
+        let t = Tensor::from_stream(handle, 1.0);
+        let err = t.try_float_data().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "Float", got: "Stream" }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_on_vector() {
+        let t = Tensor::from_vec(vec![1.0, 2.0], 1.0);
+        let err = t.try_as_scalar().unwrap_err();
+        assert!(matches!(err, TensorError::NotScalar { .. }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_on_string_scalar() {
+        let t = Tensor::scalar_string("oops".into(), 1.0);
+        let err = t.try_as_scalar().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "Float or Decimal", got: "String" }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_decimal_on_string() {
+        let t = Tensor::scalar_string("nope".into(), 1.0);
+        let err = t.try_as_scalar_decimal().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "Decimal or Float", got: "String" }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_string_on_float() {
+        let t = Tensor::scalar(1.0, 1.0);
+        let err = t.try_as_scalar_string().unwrap_err();
+        assert!(matches!(err, TensorError::TypeMismatch { expected: "String", got: "Float" }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_string_on_vector() {
+        let t = Tensor::from_strings(vec!["a".into(), "b".into()], 1.0);
+        let err = t.try_as_scalar_string().unwrap_err();
+        assert!(matches!(err, TensorError::NotScalar { .. }));
+    }
+
+    #[test]
+    fn test_try_as_scalar_decimal_happy_path() {
+        let d = Decimal::new(12345, 2);
+        let t = Tensor::scalar_decimal(d, 0.9);
+        assert_eq!(t.try_as_scalar_decimal().unwrap(), d);
+    }
+
+    #[test]
+    fn test_try_as_scalar_decimal_from_float() {
+        let t = Tensor::scalar(1.5, 1.0);
+        let dec = t.try_as_scalar_decimal().unwrap();
+        assert!(dec > Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_try_sum_on_string_tensor() {
+        let t = Tensor::scalar_string("bad".into(), 1.0);
+        assert!(t.try_sum().is_err());
+    }
+
+    #[test]
+    fn test_try_mean_on_string_tensor() {
+        let t = Tensor::scalar_string("bad".into(), 1.0);
+        assert!(t.try_mean().is_err());
+    }
+
+    #[test]
+    fn test_try_relu_on_string_tensor() {
+        let t = Tensor::scalar_string("bad".into(), 1.0);
+        assert!(t.try_relu().is_err());
+    }
+
+    #[test]
+    fn test_try_sigmoid_on_string_tensor() {
+        let t = Tensor::scalar_string("bad".into(), 1.0);
+        assert!(t.try_sigmoid().is_err());
+    }
+
+    #[test]
+    fn test_try_tanh_on_string_tensor() {
+        let t = Tensor::scalar_string("bad".into(), 1.0);
+        assert!(t.try_tanh().is_err());
+    }
+
+    #[test]
+    fn test_try_softmax_on_decimal_tensor() {
+        let t = Tensor::scalar_decimal(Decimal::ONE, 1.0);
+        assert!(t.try_softmax().is_err());
+    }
+
+    #[test]
+    fn test_try_argmax_on_decimal_tensor() {
+        let t = Tensor::scalar_decimal(Decimal::ONE, 1.0);
+        assert!(t.try_argmax().is_err());
+    }
+
+    #[test]
+    fn test_matmul_rejects_non_float() {
+        let a = Tensor::from_strings(vec!["x".into()], 1.0);
+        let b = Tensor::new(vec![1, 1], vec![1.0], 1.0);
+        let err = a.matmul(&b);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_transpose_rejects_non_float() {
+        let a = Tensor::with_data(
+            vec![1, 2],
+            TensorData::String(vec!["a".into(), "b".into()]),
+            1.0,
+        );
+        assert!(a.transpose().is_err());
+    }
+
+    #[test]
+    fn test_concat_rejects_non_float() {
+        let a = Tensor::scalar_string("x".into(), 1.0);
+        let b = Tensor::scalar_string("y".into(), 1.0);
+        assert!(Tensor::concat(&[&a, &b]).is_err());
     }
 }

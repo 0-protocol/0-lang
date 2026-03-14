@@ -101,7 +101,7 @@ fn test_get_gas_price_can_feed_json_get() {
 
     let mut vm = VM::new();
     let outputs = vm.execute(&graph).unwrap();
-    assert!((outputs[0].as_scalar() - 32.0).abs() < 0.001);
+    assert!((outputs[0].try_as_scalar().unwrap() - 32.0).abs() < 0.001);
 
     server.join().unwrap();
 }
@@ -172,7 +172,7 @@ fn test_oracle_read_can_feed_json_get() {
 
     let mut vm = VM::new();
     let outputs = vm.execute(&graph).unwrap();
-    assert!((outputs[0].as_scalar() - 9.876_543).abs() < 0.000_1);
+    assert!((outputs[0].try_as_scalar().unwrap() - 9.876_543).abs() < 0.000_1);
 
     server.join().unwrap();
 }

@@ -44,15 +44,16 @@ pub enum HttpMethod {
     Delete,
 }
 
-impl HttpMethod {
-    /// Parse HTTP method from string
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for HttpMethod {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "get" => Some(HttpMethod::Get),
-            "post" => Some(HttpMethod::Post),
-            "put" => Some(HttpMethod::Put),
-            "delete" => Some(HttpMethod::Delete),
-            _ => None,
+            "get" => Ok(HttpMethod::Get),
+            "post" => Ok(HttpMethod::Post),
+            "put" => Ok(HttpMethod::Put),
+            "delete" => Ok(HttpMethod::Delete),
+            _ => Err(format!("Unknown HTTP method: {}", s)),
         }
     }
 }
@@ -101,8 +102,8 @@ impl HttpResolver {
             return Err(format!("Expected 'http' prefix, got: {}", parts[0]));
         }
 
-        let method = HttpMethod::from_str(parts[1])
-            .ok_or_else(|| format!("Unknown HTTP method: {}", parts[1]))?;
+        let method = parts[1].parse::<HttpMethod>()
+            .map_err(|_| format!("Unknown HTTP method: {}", parts[1]))?;
         let service = parts[2].to_string();
         let path = parts[3].to_string();
 
@@ -139,7 +140,7 @@ impl HttpResolver {
     #[allow(dead_code)]
     fn json_to_tensor(&self, json_str: &str, status_code: u16) -> Result<Tensor, String> {
         // Calculate confidence from HTTP status code
-        let confidence = if status_code >= 200 && status_code < 300 {
+        let confidence = if (200..300).contains(&status_code) {
             1.0
         } else if status_code >= 400 {
             0.0

@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::graph::{GraphError, NodeHash, Op, RuntimeGraph, RuntimeNode};
+use crate::graph::{GraphError, NodeHash, Op, RuntimeGraph, RuntimeNode, RuntimeProof};
 use crate::Tensor;
 
 /// Canonical hash prefix bytes for different node types.
@@ -32,7 +32,7 @@ pub fn hash_tensor(tensor: &Tensor) -> Vec<u8> {
     }
 
     // Data - use the to_bytes method which handles all TensorData variants
-    hasher.update(&tensor.to_bytes());
+    hasher.update(tensor.to_bytes());
 
     // Confidence
     hasher.update(tensor.confidence.to_le_bytes());
@@ -217,10 +217,10 @@ fn hash_permission_node(
     fallback: &NodeHash,
 ) -> Vec<u8> {
     let mut hasher = Sha256::new();
-    hasher.update(&[6u8]); // Node type marker for Permission
+    hasher.update([6u8]);
     hasher.update(subject);
     hasher.update(action);
-    hasher.update(&threshold.to_le_bytes());
+    hasher.update(threshold.to_le_bytes());
     hasher.update(fallback);
     hasher.finalize().to_vec()
 }
@@ -232,11 +232,11 @@ fn hash_route_node(
     default: &NodeHash,
 ) -> Vec<u8> {
     let mut hasher = Sha256::new();
-    hasher.update(&[7u8]); // Node type marker for Route
+    hasher.update([7u8]);
     hasher.update(input);
     for route in routes {
         hasher.update(&route.condition);
-        hasher.update(&route.threshold.to_le_bytes());
+        hasher.update(route.threshold.to_le_bytes());
         hasher.update(&route.target);
         hasher.update(route.metadata.name.as_bytes());
     }
@@ -252,16 +252,16 @@ fn hash_timer_node(
     overlap_policy: &crate::graph::OverlapPolicy,
 ) -> Vec<u8> {
     let mut hasher = Sha256::new();
-    hasher.update(&[8u8]); // Node type marker for Timer
+    hasher.update([8u8]);
     hasher.update(schedule.as_bytes());
     hasher.update(target);
-    hasher.update(&max_concurrent.to_le_bytes());
+    hasher.update(max_concurrent.to_le_bytes());
     let policy_byte = match overlap_policy {
         crate::graph::OverlapPolicy::Skip => 0u8,
         crate::graph::OverlapPolicy::Queue => 1u8,
         crate::graph::OverlapPolicy::Parallel => 2u8,
     };
-    hasher.update(&[policy_byte]);
+    hasher.update([policy_byte]);
     hasher.finalize().to_vec()
 }
 
@@ -516,10 +516,80 @@ pub fn verify_graph(
         }
     }
 
+    // Verify shape proofs if requested
+    if options.verify_shape_proofs {
+        verify_shape_proof_validity(graph)?;
+    }
+
     // Check for cycles using DFS
     verify_no_cycles(graph)?;
 
     Ok(result)
+}
+
+/// Verify ShapeValid proofs are present and consistent with the graph.
+///
+/// When shape proof verification is enabled, at least one ShapeValid proof must
+/// exist. Each proof's declared shapes must have valid (non-zero) dimensions, and
+/// output shapes must match observable constant outputs.
+fn verify_shape_proof_validity(graph: &RuntimeGraph) -> Result<(), VerifyError> {
+    let shape_proofs: Vec<(&Vec<Vec<u32>>, &Vec<u32>)> = graph
+        .proofs
+        .iter()
+        .filter_map(|p| match p {
+            RuntimeProof::ShapeValid {
+                input_shapes,
+                output_shape,
+            } => Some((input_shapes, output_shape)),
+            _ => None,
+        })
+        .collect();
+
+    if shape_proofs.is_empty() {
+        return Err(VerifyError::ShapeProofInvalid(
+            "no ShapeValid proof present".into(),
+        ));
+    }
+
+    for (input_shapes, output_shape) in &shape_proofs {
+        if output_shape.is_empty() {
+            return Err(VerifyError::ShapeProofInvalid(
+                "output shape is empty".into(),
+            ));
+        }
+        if output_shape.contains(&0) {
+            return Err(VerifyError::ShapeProofInvalid(
+                "output shape has zero dimension".into(),
+            ));
+        }
+
+        for (i, shape) in input_shapes.iter().enumerate() {
+            if shape.is_empty() {
+                return Err(VerifyError::ShapeProofInvalid(
+                    format!("input shape [{}] is empty", i),
+                ));
+            }
+            if shape.contains(&0) {
+                return Err(VerifyError::ShapeProofInvalid(
+                    format!("input shape [{}] has zero dimension", i),
+                ));
+            }
+        }
+
+        // Cross-check: if an output node is a Constant, its shape must match the proof
+        for output_hash in &graph.outputs {
+            if let Some(RuntimeNode::Constant(tensor)) = graph.nodes.get(output_hash) {
+                if tensor.shape.as_slice() != output_shape.as_slice() {
+                    return Err(VerifyError::ShapeProofInvalid(format!(
+                        "output node shape {:?} doesn't match proof output shape {:?}",
+                        tensor.shape, output_shape
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Verify the graph has no cycles using DFS with coloring.
@@ -871,8 +941,8 @@ mod tests {
         let tensor_a = Tensor::scalar(1.0, 1.0);
         let hash_a = hash_constant_node(&tensor_a);
 
-        let hash_b = hash_operation_node(Op::Identity, &[hash_a.clone()]);
-        let hash_c = hash_operation_node(Op::Relu, &[hash_a.clone()]);
+        let hash_b = hash_operation_node(Op::Identity, std::slice::from_ref(&hash_a));
+        let hash_c = hash_operation_node(Op::Relu, std::slice::from_ref(&hash_a));
         let hash_d = hash_operation_node(Op::Add, &[hash_b.clone(), hash_c.clone()]);
 
         let mut nodes = HashMap::new();
@@ -957,5 +1027,161 @@ mod tests {
         let hp = result.halting_proof.unwrap();
         assert_eq!(hp.max_steps, 100);
         assert_eq!(hp.fuel_budget, 1000);
+    }
+
+    // --- Shape proof verification tests ---
+
+    #[test]
+    fn test_verify_shape_proof_missing_when_required() {
+        let graph = make_simple_graph();
+        let options = VerifyOptions {
+            verify_hashes: false,
+            require_halting_proof: false,
+            verify_shape_proofs: true,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(
+            matches!(result, Err(VerifyError::ShapeProofInvalid(ref msg)) if msg.contains("no ShapeValid proof")),
+            "expected ShapeProofInvalid (missing), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_shape_proof_valid() {
+        let tensor = Tensor::scalar(42.0, 1.0);
+        let hash = hash_constant_node(&tensor);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash.clone(), RuntimeNode::Constant(tensor));
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash.clone(),
+            outputs: vec![hash],
+            version: 0,
+            proofs: vec![
+                RuntimeProof::Halting {
+                    max_steps: 100,
+                    fuel_budget: 1000,
+                },
+                RuntimeProof::ShapeValid {
+                    input_shapes: vec![vec![1]],
+                    output_shape: vec![1],
+                },
+            ],
+        };
+        let options = VerifyOptions {
+            verify_hashes: true,
+            require_halting_proof: true,
+            verify_shape_proofs: true,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(result.is_ok(), "valid shape proof should pass: {:?}", result);
+    }
+
+    #[test]
+    fn test_verify_shape_proof_output_mismatch() {
+        let tensor = Tensor::scalar(42.0, 1.0); // shape [1]
+        let hash = hash_constant_node(&tensor);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash.clone(), RuntimeNode::Constant(tensor));
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash.clone(),
+            outputs: vec![hash],
+            version: 0,
+            proofs: vec![RuntimeProof::ShapeValid {
+                input_shapes: vec![vec![1]],
+                output_shape: vec![2, 3], // doesn't match the constant's [1]
+            }],
+        };
+        let options = VerifyOptions {
+            verify_hashes: false,
+            require_halting_proof: false,
+            verify_shape_proofs: true,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(
+            matches!(result, Err(VerifyError::ShapeProofInvalid(ref msg)) if msg.contains("doesn't match")),
+            "expected ShapeProofInvalid (mismatch), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_shape_proof_zero_dimension() {
+        let tensor = Tensor::scalar(1.0, 1.0);
+        let hash = hash_constant_node(&tensor);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash.clone(), RuntimeNode::Constant(tensor));
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash.clone(),
+            outputs: vec![hash],
+            version: 0,
+            proofs: vec![RuntimeProof::ShapeValid {
+                input_shapes: vec![vec![0]], // invalid zero dimension
+                output_shape: vec![1],
+            }],
+        };
+        let options = VerifyOptions {
+            verify_hashes: false,
+            require_halting_proof: false,
+            verify_shape_proofs: true,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(
+            matches!(result, Err(VerifyError::ShapeProofInvalid(ref msg)) if msg.contains("zero dimension")),
+            "expected ShapeProofInvalid (zero dim), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_shape_proof_empty_output_shape() {
+        let tensor = Tensor::scalar(1.0, 1.0);
+        let hash = hash_constant_node(&tensor);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(hash.clone(), RuntimeNode::Constant(tensor));
+
+        let graph = RuntimeGraph {
+            nodes,
+            entry_point: hash.clone(),
+            outputs: vec![hash],
+            version: 0,
+            proofs: vec![RuntimeProof::ShapeValid {
+                input_shapes: vec![vec![1]],
+                output_shape: vec![], // empty
+            }],
+        };
+        let options = VerifyOptions {
+            verify_hashes: false,
+            require_halting_proof: false,
+            verify_shape_proofs: true,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(
+            matches!(result, Err(VerifyError::ShapeProofInvalid(ref msg)) if msg.contains("empty")),
+            "expected ShapeProofInvalid (empty output), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_verify_shape_proof_skipped_when_disabled() {
+        let graph = make_simple_graph(); // no shape proof present
+        let options = VerifyOptions {
+            verify_hashes: false,
+            require_halting_proof: false,
+            verify_shape_proofs: false,
+        };
+        let result = verify_graph(&graph, &options);
+        assert!(result.is_ok(), "shape check disabled should pass: {:?}", result);
     }
 }

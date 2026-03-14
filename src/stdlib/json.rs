@@ -153,7 +153,7 @@ fn get_value_by_path<'a>(value: &'a Value, path: &str) -> Result<&'a Value, Json
             
             current = arr
                 .get(index)
-                .ok_or_else(|| JsonError::IndexOutOfBounds { index, len: arr.len() })?;
+                .ok_or(JsonError::IndexOutOfBounds { index, len: arr.len() })?;
         } else if !segment.is_empty() {
             // Simple key navigation
             current = current
@@ -253,7 +253,7 @@ mod tests {
         let json = r#"{"data": {"price": 42000.50}}"#;
         let tensor = Tensor::scalar_string(json.to_string(), 1.0);
         let result = json_get(&tensor, "data.price").unwrap();
-        assert!((result.as_scalar() - 42000.50).abs() < 0.01);
+        assert!((result.try_as_scalar().unwrap() - 42_000.5).abs() < 0.01);
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         let json = r#"{"symbol": "BTC/USD"}"#;
         let tensor = Tensor::scalar_string(json.to_string(), 1.0);
         let result = json_get(&tensor, "symbol").unwrap();
-        assert_eq!(result.as_scalar_string(), "BTC/USD");
+        assert_eq!(result.try_as_scalar_string().unwrap(), "BTC/USD");
     }
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
         let json = r#"{"trades": [{"price": 100}, {"price": 200}]}"#;
         let tensor = Tensor::scalar_string(json.to_string(), 1.0);
         let result = json_get(&tensor, "trades[1].price").unwrap();
-        assert_eq!(result.as_scalar(), 200.0);
+        assert_eq!(result.try_as_scalar().unwrap(), 200.0);
     }
 
     #[test]
