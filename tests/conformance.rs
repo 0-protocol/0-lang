@@ -5,7 +5,7 @@
 //! is introduced into the system.
 
 use capnp::serialize;
-use zerolang::{stdlib, verify_graph, RuntimeGraph, Tensor, VerifyOptions, VM};
+use zerolang::{stdlib, verify_graph, RuntimeGraph, Tensor, TensorData, VerifyOptions, VM};
 
 // =============================================================================
 // EMBEDDING / GENESIS TESTS
@@ -48,7 +48,7 @@ fn test_hello_world_conformance() {
     // Verify content matches the canonical embedding
     let expected = stdlib::hello_embedding();
     assert_eq!(
-        output.data, expected,
+        output.data, TensorData::Float(expected),
         "Output data must match the canonical embedding"
     );
 }
@@ -142,7 +142,7 @@ fn test_tensor_matmul_golden() {
     // Row 0: [1*7+2*9+3*11, 1*8+2*10+3*12] = [58, 64]
     // Row 1: [4*7+5*9+6*11, 4*8+5*10+6*12] = [139, 154]
     assert_eq!(c.shape, vec![2, 2]);
-    assert_eq!(c.data, vec![58.0, 64.0, 139.0, 154.0]);
+    assert_eq!(*c.float_data(), vec![58.0, 64.0, 139.0, 154.0]);
 }
 
 #[test]
@@ -151,15 +151,16 @@ fn test_tensor_softmax_golden() {
     let s = t.softmax();
 
     // Verify properties of softmax
-    let sum: f32 = s.data.iter().sum();
+    let float_data = s.float_data();
+    let sum: f32 = float_data.iter().sum();
     assert!((sum - 1.0).abs() < 1e-6, "Softmax must sum to 1.0");
 
     // All values must be positive
-    assert!(s.data.iter().all(|&x| x > 0.0));
+    assert!(float_data.iter().all(|&x| x > 0.0));
 
     // Monotonicity: higher input -> higher output
-    assert!(s.data[2] > s.data[1]);
-    assert!(s.data[1] > s.data[0]);
+    assert!(float_data[2] > float_data[1]);
+    assert!(float_data[1] > float_data[0]);
 }
 
 #[test]

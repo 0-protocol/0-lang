@@ -76,6 +76,14 @@ Agent A: "Here is a sorting algorithm." + [Proof it halts]
 Agent B: Verifies proof instantly before execution.
 ```
 
+### 5. Agent-Native Web3 Primitives
+
+Zero does not treat on-chain state as a human dashboard problem.
+
+- `Op::OracleRead` performs machine-first EVM reads via `eth_call`.
+- `Op::GetGasPrice` emits canonical gas quote payloads for agent routing and execution.
+- Outputs are encoded as stable JSON tensors so downstream graphs can consume fields via `JsonGet`.
+
 ---
 
 ## Comparison

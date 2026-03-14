@@ -166,22 +166,31 @@ fn execute_graph(input: &PathBuf, unsafe_mode: bool) -> Result<(), Box<dyn std::
         if tensor.is_scalar() {
             println!("        Value: {}", tensor.as_scalar());
         } else if tensor.numel() <= 10 {
-            println!("        Data: {:?}", tensor.data);
+            match &tensor.data {
+                zerolang::TensorData::Float(data) => println!("        Data: {:?}", data),
+                zerolang::TensorData::String(data) => println!("        Data: {:?}", data),
+                zerolang::TensorData::Decimal(data) => println!("        Data: {:?}", data),
+                zerolang::TensorData::Stream(handle) => println!("        Stream: id={}, source={:?}", handle.id, handle.source_type),
+            }
         } else {
             // For large tensors, show preview
-            let preview: Vec<f32> = tensor.data.iter().take(5).copied().collect();
-            println!(
-                "        Data: {:?}... ({} elements)",
-                preview,
-                tensor.numel()
-            );
+            if let Some(float_data) = tensor.data.as_float() {
+                let preview: Vec<f32> = float_data.iter().take(5).copied().collect();
+                println!(
+                    "        Data: {:?}... ({} elements)",
+                    preview,
+                    tensor.numel()
+                );
 
-            // Try to decode "HELLO" if it looks like an embedding
-            if tensor.shape == vec![768] && tensor.data.len() >= 5 {
-                let decoded: String = (0..5)
-                    .map(|i| (tensor.data[i] * 255.0) as u8 as char)
-                    .collect();
-                println!("        Decoded: \"{}\"", decoded);
+                // Try to decode "HELLO" if it looks like an embedding
+                if tensor.shape == vec![768] && float_data.len() >= 5 {
+                    let decoded: String = (0..5)
+                        .map(|i| (float_data[i] * 255.0) as u8 as char)
+                        .collect();
+                    println!("        Decoded: \"{}\"", decoded);
+                }
+            } else {
+                println!("        Data: <{} elements>", tensor.numel());
             }
         }
     }
@@ -266,6 +275,9 @@ fn inspect_graph(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
             node::Branch(br) => {
                 println!("BRANCH threshold={:.2}", br.get_threshold());
+            }
+            node::State(st) => {
+                println!("STATE key={:?}", st.get_key()?);
             }
         }
     }

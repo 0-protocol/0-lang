@@ -97,6 +97,15 @@ Quest {
 - **Proof Required:** Same function always produces same hash.
 - **Dependencies:** `Quest 0.3`
 
+### Quest 1.4: Agent-Native Web3 Operators
+- **Status:** `[0.5]`
+- **Description:** Add machine-first on-chain primitives for agent execution:
+  - `Op::OracleRead` for canonical EVM `eth_call` reads
+  - `Op::GetGasPrice` for EIP-1559-compatible gas quotes
+  - Stable JSON tensor outputs consumable by `JsonGet`
+- **Proof Required:** Graph tests can read gas/oracle fields deterministically from mocked RPC responses.
+- **Dependencies:** `Quest 0.3`, `Quest 1.1`
+
 ---
 
 ## Phase 2: Interoperability
