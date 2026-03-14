@@ -1,7 +1,9 @@
-//! Standard Library - Golden Rule Graph Generators
+//! Standard Library - Golden Rule Graph Generators and JSON Operations
 //!
 //! This module contains the canonical implementations of the standard
-//! 0-lang graphs used for verification and testing.
+//! 0-lang graphs used for verification and testing, plus JSON utilities.
+
+pub mod json;
 
 use crate::graph::Op;
 use crate::verify::{hash_constant_node, hash_operation_node};

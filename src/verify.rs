@@ -15,10 +15,11 @@ const HASH_PREFIX_CONSTANT: u8 = 0x01;
 const HASH_PREFIX_OPERATION: u8 = 0x02;
 const HASH_PREFIX_BRANCH: u8 = 0x03;
 const HASH_PREFIX_EXTERNAL: u8 = 0x04;
+const HASH_PREFIX_STATE: u8 = 0x05;
 
 /// Compute the canonical hash of a Tensor.
 ///
-/// Format: shape_len (u32 LE) + shape dims (u32 LE each) + data (f32 LE each) + confidence (f32 LE)
+/// Format: shape_len (u32 LE) + shape dims (u32 LE each) + data bytes + confidence (f32 LE)
 pub fn hash_tensor(tensor: &Tensor) -> Vec<u8> {
     let mut hasher = Sha256::new();
 
@@ -30,10 +31,8 @@ pub fn hash_tensor(tensor: &Tensor) -> Vec<u8> {
         hasher.update(dim.to_le_bytes());
     }
 
-    // Data
-    for &val in &tensor.data {
-        hasher.update(val.to_le_bytes());
-    }
+    // Data - use the to_bytes method which handles all TensorData variants
+    hasher.update(&tensor.to_bytes());
 
     // Confidence
     hasher.update(tensor.confidence.to_le_bytes());
@@ -113,6 +112,24 @@ pub fn hash_external_node(uri: &str, inputs: &[NodeHash]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
+/// Compute the canonical hash of a State node.
+///
+/// Format: PREFIX_STATE + key_len (u32 LE) + key_bytes + tensor_hash
+pub fn hash_state_node(key: &str, default: &Tensor) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update([HASH_PREFIX_STATE]);
+
+    // Key
+    let key_bytes = key.as_bytes();
+    hasher.update((key_bytes.len() as u32).to_le_bytes());
+    hasher.update(key_bytes);
+
+    // Default tensor hash
+    hasher.update(hash_tensor(default));
+
+    hasher.finalize().to_vec()
+}
+
 /// Compute the canonical hash of a RuntimeNode.
 pub fn hash_node(node: &RuntimeNode) -> Vec<u8> {
     match node {
@@ -125,6 +142,24 @@ pub fn hash_node(node: &RuntimeNode) -> Vec<u8> {
             false_branch,
         } => hash_branch_node(condition, *threshold, true_branch, false_branch),
         RuntimeNode::External { uri, inputs } => hash_external_node(uri, inputs),
+        RuntimeNode::State { key, default } => hash_state_node(key, default),
+        RuntimeNode::Permission {
+            subject,
+            action,
+            threshold,
+            fallback,
+        } => hash_permission_node(subject, action, *threshold, fallback),
+        RuntimeNode::Route {
+            input,
+            routes,
+            default,
+        } => hash_route_node(input, routes, default),
+        RuntimeNode::Timer {
+            schedule,
+            target,
+            max_concurrent,
+            overlap_policy,
+        } => hash_timer_node(schedule, target, *max_concurrent, overlap_policy),
     }
 }
 
@@ -159,7 +194,75 @@ fn op_to_byte(op: Op) -> u8 {
         Op::Abs => 24,
         Op::Neg => 25,
         Op::Clamp => 26,
+        // JSON operations
+        Op::JsonParse => 27,
+        Op::JsonGet => 28,
+        Op::JsonArray => 29,
+        // Agent-native Web3 operations
+        Op::OracleRead => 30,
+        Op::GetGasPrice => 31,
+        // Confidence operations (Agent #6 extension)
+        Op::ConfidenceCombine => 32,
+        Op::ConfidenceThreshold => 33,
+        Op::ConfidenceDecay => 34,
+        Op::ConfidenceBoost => 35,
     }
+}
+
+/// Hash a permission node
+fn hash_permission_node(
+    subject: &NodeHash,
+    action: &NodeHash,
+    threshold: f32,
+    fallback: &NodeHash,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[6u8]); // Node type marker for Permission
+    hasher.update(subject);
+    hasher.update(action);
+    hasher.update(&threshold.to_le_bytes());
+    hasher.update(fallback);
+    hasher.finalize().to_vec()
+}
+
+/// Hash a route node
+fn hash_route_node(
+    input: &NodeHash,
+    routes: &[crate::graph::Route],
+    default: &NodeHash,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[7u8]); // Node type marker for Route
+    hasher.update(input);
+    for route in routes {
+        hasher.update(&route.condition);
+        hasher.update(&route.threshold.to_le_bytes());
+        hasher.update(&route.target);
+        hasher.update(route.metadata.name.as_bytes());
+    }
+    hasher.update(default);
+    hasher.finalize().to_vec()
+}
+
+/// Hash a timer node
+fn hash_timer_node(
+    schedule: &str,
+    target: &NodeHash,
+    max_concurrent: u32,
+    overlap_policy: &crate::graph::OverlapPolicy,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[8u8]); // Node type marker for Timer
+    hasher.update(schedule.as_bytes());
+    hasher.update(target);
+    hasher.update(&max_concurrent.to_le_bytes());
+    let policy_byte = match overlap_policy {
+        crate::graph::OverlapPolicy::Skip => 0u8,
+        crate::graph::OverlapPolicy::Queue => 1u8,
+        crate::graph::OverlapPolicy::Parallel => 2u8,
+    };
+    hasher.update(&[policy_byte]);
+    hasher.finalize().to_vec()
 }
 
 /// Verification errors
@@ -336,6 +439,9 @@ pub fn verify_graph(
         // Verify all referenced nodes exist
         match node {
             RuntimeNode::Constant(_) => {}
+            RuntimeNode::State { .. } => {
+                // State nodes don't reference other nodes
+            }
             RuntimeNode::Operation { inputs, .. } => {
                 for input in inputs {
                     if !graph.nodes.contains_key(input) {
@@ -364,6 +470,47 @@ pub fn verify_graph(
                     if !graph.nodes.contains_key(input) {
                         return Err(VerifyError::MissingNode(hex::encode(input)));
                     }
+                }
+            }
+            RuntimeNode::Permission {
+                subject,
+                action,
+                fallback,
+                ..
+            } => {
+                if !graph.nodes.contains_key(subject) {
+                    return Err(VerifyError::MissingNode(hex::encode(subject)));
+                }
+                if !graph.nodes.contains_key(action) {
+                    return Err(VerifyError::MissingNode(hex::encode(action)));
+                }
+                if !graph.nodes.contains_key(fallback) {
+                    return Err(VerifyError::MissingNode(hex::encode(fallback)));
+                }
+            }
+            RuntimeNode::Route {
+                input,
+                routes,
+                default,
+            } => {
+                if !graph.nodes.contains_key(input) {
+                    return Err(VerifyError::MissingNode(hex::encode(input)));
+                }
+                for route in routes {
+                    if !graph.nodes.contains_key(&route.condition) {
+                        return Err(VerifyError::MissingNode(hex::encode(&route.condition)));
+                    }
+                    if !graph.nodes.contains_key(&route.target) {
+                        return Err(VerifyError::MissingNode(hex::encode(&route.target)));
+                    }
+                }
+                if !graph.nodes.contains_key(default) {
+                    return Err(VerifyError::MissingNode(hex::encode(default)));
+                }
+            }
+            RuntimeNode::Timer { target, .. } => {
+                if !graph.nodes.contains_key(target) {
+                    return Err(VerifyError::MissingNode(hex::encode(target)));
                 }
             }
         }
@@ -401,6 +548,7 @@ fn verify_no_cycles(graph: &RuntimeGraph) -> Result<(), VerifyError> {
         if let Some(node) = graph.nodes.get(hash) {
             let deps: Vec<&NodeHash> = match node {
                 RuntimeNode::Constant(_) => vec![],
+                RuntimeNode::State { .. } => vec![], // State nodes have no dependencies
                 RuntimeNode::Operation { inputs, .. } => inputs.iter().collect(),
                 RuntimeNode::Branch {
                     condition,
@@ -409,6 +557,25 @@ fn verify_no_cycles(graph: &RuntimeGraph) -> Result<(), VerifyError> {
                     ..
                 } => vec![condition, true_branch, false_branch],
                 RuntimeNode::External { inputs, .. } => inputs.iter().collect(),
+                RuntimeNode::Permission {
+                    subject,
+                    action,
+                    fallback,
+                    ..
+                } => vec![subject, action, fallback],
+                RuntimeNode::Route {
+                    input,
+                    routes,
+                    default,
+                } => {
+                    let mut deps = vec![input, default];
+                    for route in routes {
+                        deps.push(&route.condition);
+                        deps.push(&route.target);
+                    }
+                    deps
+                }
+                RuntimeNode::Timer { target, .. } => vec![target],
             };
 
             for dep in deps {

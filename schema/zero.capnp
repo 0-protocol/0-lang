@@ -49,6 +49,12 @@ struct Node {
       trueBranch @8 :NodeId;
       falseBranch @9 :NodeId;
     }
+    
+    # State node for persistent values across executions (positions, balances)
+    state :group {
+      key @10 :Text;            # Unique key for state storage
+      default @11 :Tensor;      # Default value if state doesn't exist
+    }
   }
 }
 
@@ -93,6 +99,21 @@ enum Operation {
   abs @24;         # Absolute value
   neg @25;         # Negation
   clamp @26;       # Clamp to range (useful for position limits)
+  
+  # JSON operations (for API responses)
+  jsonParse @27;   # Parse JSON string into structured tensor
+  jsonGet @28;     # Extract value by key path (e.g., "data.price")
+  jsonArray @29;   # Extract array elements
+
+  # Agent-native Web3 operations
+  oracleRead @30;  # Low-level EVM oracle/contract read via eth_call
+  getGasPrice @31; # Fetch EVM gas quote with EIP-1559-compatible fields
+
+  # Confidence operations (for agent routing and trust composition)
+  confidenceCombine @32;
+  confidenceThreshold @33;
+  confidenceDecay @34;
+  confidenceBoost @35;
 }
 
 struct Proof {
