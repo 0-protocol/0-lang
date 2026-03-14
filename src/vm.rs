@@ -962,6 +962,57 @@ impl VM {
                 self.execute_confidence_decay(input_tensors[0], decay_factor)
             }
 
+            Op::VerifySignature => {
+                if input_tensors.len() != 3 {
+                    return Err(VMError::WrongInputCount {
+                        expected: 3,
+                        got: input_tensors.len(),
+                    });
+                }
+                
+                let message_hex = input_tensors[0].try_as_scalar_string().map_err(Self::tensor_err)?;
+                let signature_hex = input_tensors[1].try_as_scalar_string().map_err(Self::tensor_err)?;
+                let expected_signer_hex = input_tensors[2].try_as_scalar_string().map_err(Self::tensor_err)?;
+                
+                let message_bytes = hex::decode(message_hex.trim_start_matches("0x")).unwrap_or_default();
+                let sig_bytes = hex::decode(signature_hex.trim_start_matches("0x")).unwrap_or_default();
+                let expected_address = hex::decode(expected_signer_hex.trim_start_matches("0x")).unwrap_or_default();
+                
+                if sig_bytes.len() != 65 || message_bytes.is_empty() || expected_address.is_empty() {
+                    return Ok(Tensor::scalar(0.0, 1.0));
+                }
+                
+                use k256::ecdsa::{Signature, RecoveryId, VerifyingKey};
+                use sha3::{Digest, Keccak256};
+                
+                let rec_id_val = if sig_bytes[64] >= 27 { sig_bytes[64] - 27 } else { sig_bytes[64] };
+                let recid = match RecoveryId::try_from(rec_id_val) {
+                    Ok(id) => id,
+                    Err(_) => return Ok(Tensor::scalar(0.0, 1.0)),
+                };
+                
+                let sig = match Signature::from_slice(&sig_bytes[..64]) {
+                    Ok(s) => s,
+                    Err(_) => return Ok(Tensor::scalar(0.0, 1.0)),
+                };
+                
+                let vk = match VerifyingKey::recover_from_prehash(&message_bytes, &sig, recid) {
+                    Ok(k) => k,
+                    Err(_) => return Ok(Tensor::scalar(0.0, 1.0)),
+                };
+                
+                let pubkey_bytes = &vk.to_encoded_point(false).as_bytes()[1..];
+                let mut hasher = Keccak256::new();
+                hasher.update(pubkey_bytes);
+                let recovered_address = &hasher.finalize()[12..32];
+                
+                if recovered_address == expected_address.as_slice() {
+                    Ok(Tensor::scalar(1.0, 1.0))
+                } else {
+                    Ok(Tensor::scalar(0.0, 1.0))
+                }
+            }
+
             Op::ConfidenceBoost => {
                 if input_tensors.len() != 2 {
                     return Err(VMError::WrongInputCount {

@@ -149,6 +149,7 @@ pub enum Op {
     // Agent-native Web3 operations
     OracleRead,   // Read oracle/contract state via EVM eth_call
     GetGasPrice,  // Fetch EVM gas price quote
+    VerifySignature,
     // Confidence operations (for AI assistant applications)
     ConfidenceCombine,    // Combine multiple confidence scores
     ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
@@ -201,6 +202,7 @@ impl Op {
             // Agent-native Web3 operations
             Operation::OracleRead => Ok(Op::OracleRead),
             Operation::GetGasPrice => Ok(Op::GetGasPrice),
+            Operation::VerifySignature => Ok(Op::VerifySignature),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
             Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),
