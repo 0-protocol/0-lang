@@ -143,6 +143,23 @@ pub fn hash_node(node: &RuntimeNode) -> Vec<u8> {
         } => hash_branch_node(condition, *threshold, true_branch, false_branch),
         RuntimeNode::External { uri, inputs } => hash_external_node(uri, inputs),
         RuntimeNode::State { key, default } => hash_state_node(key, default),
+        RuntimeNode::Permission {
+            subject,
+            action,
+            threshold,
+            fallback,
+        } => hash_permission_node(subject, action, *threshold, fallback),
+        RuntimeNode::Route {
+            input,
+            routes,
+            default,
+        } => hash_route_node(input, routes, default),
+        RuntimeNode::Timer {
+            schedule,
+            target,
+            max_concurrent,
+            overlap_policy,
+        } => hash_timer_node(schedule, target, *max_concurrent, overlap_policy),
     }
 }
 
@@ -181,7 +198,71 @@ fn op_to_byte(op: Op) -> u8 {
         Op::JsonParse => 27,
         Op::JsonGet => 28,
         Op::JsonArray => 29,
+        // Agent-native Web3 operations
+        Op::OracleRead => 30,
+        Op::GetGasPrice => 31,
+        // Confidence operations (Agent #6 extension)
+        Op::ConfidenceCombine => 32,
+        Op::ConfidenceThreshold => 33,
+        Op::ConfidenceDecay => 34,
+        Op::ConfidenceBoost => 35,
     }
+}
+
+/// Hash a permission node
+fn hash_permission_node(
+    subject: &NodeHash,
+    action: &NodeHash,
+    threshold: f32,
+    fallback: &NodeHash,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[6u8]); // Node type marker for Permission
+    hasher.update(subject);
+    hasher.update(action);
+    hasher.update(&threshold.to_le_bytes());
+    hasher.update(fallback);
+    hasher.finalize().to_vec()
+}
+
+/// Hash a route node
+fn hash_route_node(
+    input: &NodeHash,
+    routes: &[crate::graph::Route],
+    default: &NodeHash,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[7u8]); // Node type marker for Route
+    hasher.update(input);
+    for route in routes {
+        hasher.update(&route.condition);
+        hasher.update(&route.threshold.to_le_bytes());
+        hasher.update(&route.target);
+        hasher.update(route.metadata.name.as_bytes());
+    }
+    hasher.update(default);
+    hasher.finalize().to_vec()
+}
+
+/// Hash a timer node
+fn hash_timer_node(
+    schedule: &str,
+    target: &NodeHash,
+    max_concurrent: u32,
+    overlap_policy: &crate::graph::OverlapPolicy,
+) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(&[8u8]); // Node type marker for Timer
+    hasher.update(schedule.as_bytes());
+    hasher.update(target);
+    hasher.update(&max_concurrent.to_le_bytes());
+    let policy_byte = match overlap_policy {
+        crate::graph::OverlapPolicy::Skip => 0u8,
+        crate::graph::OverlapPolicy::Queue => 1u8,
+        crate::graph::OverlapPolicy::Parallel => 2u8,
+    };
+    hasher.update(&[policy_byte]);
+    hasher.finalize().to_vec()
 }
 
 /// Verification errors
@@ -391,6 +472,47 @@ pub fn verify_graph(
                     }
                 }
             }
+            RuntimeNode::Permission {
+                subject,
+                action,
+                fallback,
+                ..
+            } => {
+                if !graph.nodes.contains_key(subject) {
+                    return Err(VerifyError::MissingNode(hex::encode(subject)));
+                }
+                if !graph.nodes.contains_key(action) {
+                    return Err(VerifyError::MissingNode(hex::encode(action)));
+                }
+                if !graph.nodes.contains_key(fallback) {
+                    return Err(VerifyError::MissingNode(hex::encode(fallback)));
+                }
+            }
+            RuntimeNode::Route {
+                input,
+                routes,
+                default,
+            } => {
+                if !graph.nodes.contains_key(input) {
+                    return Err(VerifyError::MissingNode(hex::encode(input)));
+                }
+                for route in routes {
+                    if !graph.nodes.contains_key(&route.condition) {
+                        return Err(VerifyError::MissingNode(hex::encode(&route.condition)));
+                    }
+                    if !graph.nodes.contains_key(&route.target) {
+                        return Err(VerifyError::MissingNode(hex::encode(&route.target)));
+                    }
+                }
+                if !graph.nodes.contains_key(default) {
+                    return Err(VerifyError::MissingNode(hex::encode(default)));
+                }
+            }
+            RuntimeNode::Timer { target, .. } => {
+                if !graph.nodes.contains_key(target) {
+                    return Err(VerifyError::MissingNode(hex::encode(target)));
+                }
+            }
         }
     }
 
@@ -435,6 +557,25 @@ fn verify_no_cycles(graph: &RuntimeGraph) -> Result<(), VerifyError> {
                     ..
                 } => vec![condition, true_branch, false_branch],
                 RuntimeNode::External { inputs, .. } => inputs.iter().collect(),
+                RuntimeNode::Permission {
+                    subject,
+                    action,
+                    fallback,
+                    ..
+                } => vec![subject, action, fallback],
+                RuntimeNode::Route {
+                    input,
+                    routes,
+                    default,
+                } => {
+                    let mut deps = vec![input, default];
+                    for route in routes {
+                        deps.push(&route.condition);
+                        deps.push(&route.target);
+                    }
+                    deps
+                }
+                RuntimeNode::Timer { target, .. } => vec![target],
             };
 
             for dep in deps {

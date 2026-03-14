@@ -4,7 +4,38 @@
 //! Every value carries a confidence score.
 
 use rust_decimal::Decimal;
+use std::collections::VecDeque;
 use std::ops::{Add, Div, Mul, Sub};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Handle to a streaming data source
+#[derive(Debug, Clone)]
+pub struct StreamHandle {
+    /// Unique identifier for this stream
+    pub id: u64,
+    /// Type of stream source
+    pub source_type: StreamSource,
+    /// Buffer for incoming tensors
+    pub buffer: Arc<RwLock<VecDeque<Tensor>>>,
+}
+
+impl PartialEq for StreamHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.source_type == other.source_type
+    }
+}
+
+/// Source type for streaming data
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamSource {
+    /// WebSocket connection
+    WebSocket { url: String },
+    /// Internal channel
+    Channel { channel_id: String },
+    /// Event stream (SSE)
+    Event { event_type: String },
+}
 
 /// The data stored in a tensor - supports multiple types for trading applications.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +46,8 @@ pub enum TensorData {
     String(Vec<String>),
     /// Decimal data for financial precision calculations
     Decimal(Vec<Decimal>),
+    /// Streaming data source (WebSocket, SSE, channels)
+    Stream(StreamHandle),
 }
 
 impl TensorData {
@@ -24,6 +57,7 @@ impl TensorData {
             TensorData::Float(v) => v.len(),
             TensorData::String(v) => v.len(),
             TensorData::Decimal(v) => v.len(),
+            TensorData::Stream(_) => 0, // Streams have dynamic length
         }
     }
 
@@ -47,6 +81,11 @@ impl TensorData {
         matches!(self, TensorData::Decimal(_))
     }
 
+    /// Check if this is stream data
+    pub fn is_stream(&self) -> bool {
+        matches!(self, TensorData::Stream(_))
+    }
+
     /// Get as float data (returns None if not float type)
     pub fn as_float(&self) -> Option<&Vec<f32>> {
         match self {
@@ -67,6 +106,14 @@ impl TensorData {
     pub fn as_decimal(&self) -> Option<&Vec<Decimal>> {
         match self {
             TensorData::Decimal(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Get as stream handle (returns None if not stream type)
+    pub fn as_stream(&self) -> Option<&StreamHandle> {
+        match self {
+            TensorData::Stream(h) => Some(h),
             _ => None,
         }
     }
@@ -201,6 +248,29 @@ impl Tensor {
         }
     }
 
+    /// Create a stream tensor from a stream handle
+    pub fn from_stream(handle: StreamHandle, confidence: f32) -> Self {
+        Self {
+            shape: vec![0], // Streams have dynamic shape
+            data: TensorData::Stream(handle),
+            confidence,
+        }
+    }
+
+    /// Create a confidence-only scalar (useful for permission checks)
+    pub fn confidence_scalar(confidence: f32) -> Self {
+        Self {
+            shape: vec![1],
+            data: TensorData::Float(vec![confidence]),
+            confidence,
+        }
+    }
+
+    /// Get the confidence value of this tensor
+    pub fn confidence(&self) -> f32 {
+        self.confidence
+    }
+
     /// Get the total number of elements
     pub fn numel(&self) -> usize {
         self.shape.iter().map(|&d| d as usize).product()
@@ -221,6 +291,7 @@ impl Tensor {
                 v[0].to_f32().unwrap_or(0.0)
             }
             TensorData::String(_) => panic!("Cannot get scalar from string tensor"),
+            TensorData::Stream(_) => panic!("Cannot get scalar from stream tensor"),
         }
     }
 
@@ -240,6 +311,7 @@ impl Tensor {
             TensorData::Decimal(v) => v[0],
             TensorData::Float(v) => Decimal::from_f32_retain(v[0]).unwrap_or(Decimal::ZERO),
             TensorData::String(_) => panic!("Cannot get decimal from string tensor"),
+            TensorData::Stream(_) => panic!("Cannot get decimal from stream tensor"),
         }
     }
 
@@ -570,6 +642,25 @@ impl Tensor {
             TensorData::Float(v) => v.iter().flat_map(|f| f.to_le_bytes()).collect(),
             TensorData::String(v) => v.iter().flat_map(|s| s.as_bytes().to_vec()).collect(),
             TensorData::Decimal(v) => v.iter().flat_map(|d| d.serialize().to_vec()).collect(),
+            TensorData::Stream(h) => {
+                // Serialize stream handle id and source type
+                let mut bytes = h.id.to_le_bytes().to_vec();
+                match &h.source_type {
+                    StreamSource::WebSocket { url } => {
+                        bytes.push(0);
+                        bytes.extend(url.as_bytes());
+                    }
+                    StreamSource::Channel { channel_id } => {
+                        bytes.push(1);
+                        bytes.extend(channel_id.as_bytes());
+                    }
+                    StreamSource::Event { event_type } => {
+                        bytes.push(2);
+                        bytes.extend(event_type.as_bytes());
+                    }
+                }
+                bytes
+            }
         }
     }
 }
@@ -793,5 +884,27 @@ mod tests {
         let decimals = t.data.as_decimal().unwrap();
         assert_eq!(decimals[0], Decimal::new(12345, 2)); // 123.45
         assert_eq!(decimals[1], Decimal::new(67890, 3)); // 67.890
+    }
+
+    #[test]
+    fn test_stream_tensor() {
+        let handle = StreamHandle {
+            id: 42,
+            source_type: StreamSource::WebSocket { url: "wss://example.com".to_string() },
+            buffer: Arc::new(RwLock::new(VecDeque::new())),
+        };
+        let t = Tensor::from_stream(handle.clone(), 1.0);
+        assert!(t.data.is_stream());
+        let stream = t.data.as_stream().unwrap();
+        assert_eq!(stream.id, 42);
+        assert!(matches!(stream.source_type, StreamSource::WebSocket { .. }));
+    }
+
+    #[test]
+    fn test_confidence_scalar() {
+        let t = Tensor::confidence_scalar(0.85);
+        assert!(t.is_scalar());
+        assert_eq!(t.as_scalar(), 0.85);
+        assert_eq!(t.confidence(), 0.85);
     }
 }

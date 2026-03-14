@@ -34,6 +34,70 @@ pub enum RuntimeNode {
     External { uri: String, inputs: Vec<NodeHash> },
     /// Mutable state across executions (positions, balances)
     State { key: String, default: Tensor },
+    /// Permission check with confidence threshold
+    Permission {
+        /// Who is requesting (subject tensor)
+        subject: NodeHash,
+        /// What they want to do (action tensor)
+        action: NodeHash,
+        /// Minimum confidence required to allow
+        threshold: f32,
+        /// What to execute if denied
+        fallback: NodeHash,
+    },
+    /// Multi-path routing with priority ordering
+    Route {
+        /// Input to route
+        input: NodeHash,
+        /// Routes in priority order (first matching wins)
+        routes: Vec<Route>,
+        /// Default route if none match
+        default: NodeHash,
+    },
+    /// Scheduled execution (cron-like)
+    Timer {
+        /// Cron expression (e.g., "*/5 * * * *")
+        schedule: String,
+        /// Graph to execute when timer fires
+        target: NodeHash,
+        /// Maximum concurrent executions
+        max_concurrent: u32,
+        /// What to do if execution is still running
+        overlap_policy: OverlapPolicy,
+    },
+}
+
+/// A single route in a RouteNode
+#[derive(Debug, Clone)]
+pub struct Route {
+    /// Condition graph (must output confidence > threshold)
+    pub condition: NodeHash,
+    /// Minimum confidence to take this route
+    pub threshold: f32,
+    /// Target node if route matches
+    pub target: NodeHash,
+    /// Route metadata (for tracing)
+    pub metadata: RouteMetadata,
+}
+
+/// Metadata for route tracing and debugging
+#[derive(Debug, Clone)]
+pub struct RouteMetadata {
+    /// Human-readable route name
+    pub name: String,
+    /// Route description
+    pub description: String,
+}
+
+/// Policy for handling overlapping timer executions
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OverlapPolicy {
+    /// Skip this execution if previous is still running
+    Skip,
+    /// Queue execution for later
+    Queue,
+    /// Run in parallel
+    Parallel,
 }
 
 /// Supported operations (matches schema/zero.capnp Operation enum)
@@ -76,6 +140,14 @@ pub enum Op {
     JsonParse,  // Parse JSON string into structured tensor
     JsonGet,    // Extract value by key path (e.g., "data.price")
     JsonArray,  // Extract array elements
+    // Agent-native Web3 operations
+    OracleRead,   // Read oracle/contract state via EVM eth_call
+    GetGasPrice,  // Fetch EVM gas price quote
+    // Confidence operations (for AI assistant applications)
+    ConfidenceCombine,    // Combine multiple confidence scores
+    ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
+    ConfidenceDecay,      // Reduce confidence over time
+    ConfidenceBoost,      // Increase confidence based on history
 }
 
 impl Op {
@@ -120,6 +192,14 @@ impl Op {
             Operation::JsonParse => Ok(Op::JsonParse),
             Operation::JsonGet => Ok(Op::JsonGet),
             Operation::JsonArray => Ok(Op::JsonArray),
+            // Agent-native Web3 operations
+            Operation::OracleRead => Ok(Op::OracleRead),
+            Operation::GetGasPrice => Ok(Op::GetGasPrice),
+            // Confidence operations
+            Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
+            Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),
+            Operation::ConfidenceDecay => Ok(Op::ConfidenceDecay),
+            Operation::ConfidenceBoost => Ok(Op::ConfidenceBoost),
         }
     }
 }
@@ -454,6 +534,31 @@ impl RuntimeGraph {
                     for input in inputs {
                         self.topo_dfs(input, visited, result)?;
                     }
+                }
+                RuntimeNode::Permission {
+                    subject,
+                    action,
+                    fallback,
+                    ..
+                } => {
+                    self.topo_dfs(subject, visited, result)?;
+                    self.topo_dfs(action, visited, result)?;
+                    self.topo_dfs(fallback, visited, result)?;
+                }
+                RuntimeNode::Route {
+                    input,
+                    routes,
+                    default,
+                } => {
+                    self.topo_dfs(input, visited, result)?;
+                    for route in routes {
+                        self.topo_dfs(&route.condition, visited, result)?;
+                        self.topo_dfs(&route.target, visited, result)?;
+                    }
+                    self.topo_dfs(default, visited, result)?;
+                }
+                RuntimeNode::Timer { target, .. } => {
+                    self.topo_dfs(target, visited, result)?;
                 }
             }
         } else {

@@ -170,6 +170,7 @@ fn execute_graph(input: &PathBuf, unsafe_mode: bool) -> Result<(), Box<dyn std::
                 zerolang::TensorData::Float(data) => println!("        Data: {:?}", data),
                 zerolang::TensorData::String(data) => println!("        Data: {:?}", data),
                 zerolang::TensorData::Decimal(data) => println!("        Data: {:?}", data),
+                zerolang::TensorData::Stream(handle) => println!("        Stream: id={}, source={:?}", handle.id, handle.source_type),
             }
         } else {
             // For large tensors, show preview
