@@ -237,3 +237,13 @@ To support `0-dex`'s transition to a production Mainnet environment, `0-lang` mu
 - [ ] **Cryptographic Data Ingestion (`Op::VerifyOracleSignature`)**: Graphs must be able to natively verify signatures (e.g., Pyth Network price feeds) inside the VM. This prevents a local execution environment from spoofing HTTP oracle data.
 - [ ] **Nonce and State Locking (`Op::ReadNonce`, `Op::IncrementNonce`)**: To prevent P2P double-spend races, the VM needs a concept of a strictly increasing sequence number tied to the Agent's identity.
 - [ ] **Zero-Knowledge Execution (`VerifyZK`)**: For ultimate privacy, the VM must eventually support generating and verifying execution proofs (e.g., via Risc0 or SP1) so that intent logic can remain entirely hidden while only the resulting boundary tensors are public.
+
+### Phase 4: Agent-Native Defiance (The Post-Human Architecture)
+To support fully decentralized ecosystems (like `0-dex` V2), the compiler and VM must implement primitives that solve trust, spam, and latency directly at the mathematical layer, bypassing human constructs like Staking, Proof of Work, or trusted enclaves.
+
+- [ ] **Feature: Relativistic Pricing (`Op::GetBlockDrift`)**
+  - **Description:** Expose realtime network block delays natively within the VM to allow for continuous slippage curves. An agent can compile an intent where `Price = f(t) = Oracle * e^(-k * drift)`. The VM dynamically resolves `t_now` upon evaluation, naturally degrading the execution parameters over time to eliminate deterministic arbitrage from oracle latency.
+- [ ] **Feature: Cryptographic Collision (`Op::StateChannelSign`)**
+  - **Description:** The VM must allow two disjoint, successfully evaluated AST graphs to mathematically collide and produce a multisig state transition proof in memory. This eliminates the need for trusted central solvers; any peer that calculates the intersection algorithmically earns the right to settle the matched graphs on-chain.
+- [ ] **Feature: Structural Entropy Extraction (`Op::ExtractASTHash`)**
+  - **Description:** Provide a native function to hash the raw structural skeleton of the AST (stripping runtime variables). The P2P network will use this as a structural firewall—pruning isomorphic spam attacks instantly without paying execution costs.
