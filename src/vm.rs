@@ -1,6 +1,11 @@
 
 /// Deterministic Environment Context injected into the VM by the Host.
 #[derive(Debug, Clone, Copy)]
+
+pub trait HostCallback: Send + Sync {
+    fn sign_state_channel(&self, state_hash: &str) -> Result<String, String>;
+}
+
 pub struct EnvContext {
     pub latest_block_timestamp: u64,
 }
@@ -186,6 +191,8 @@ impl VM {
             ops_executed: 0,
             external_resolver: None,
             state: HashMap::new(),
+            env: EnvContext::default(),
+            host_callback: None,
         }
     }
 
@@ -197,6 +204,8 @@ impl VM {
             ops_executed: 0,
             external_resolver: None,
             state: HashMap::new(),
+            env: EnvContext::default(),
+            host_callback: None,
         }
     }
 
@@ -229,6 +238,16 @@ impl VM {
         self.external_resolver = Some(resolver);
         self
     }
+    pub fn with_env(mut self, env: EnvContext) -> Self {
+        self.env = env;
+        self
+    }
+
+    pub fn with_host_callback(mut self, callback: Arc<dyn HostCallback>) -> Self {
+        self.host_callback = Some(callback);
+        self
+    }
+
 
     /// Check if this graph contains external nodes
     pub fn graph_has_external_nodes(graph: &RuntimeGraph) -> bool {
@@ -976,19 +995,27 @@ impl VM {
             Op::GetBlockDrift => {
                 // Fetch dynamic block drift for relativistic pricing
                 // ✅ Deterministic Relativistic Pricing 
-                // Uses the injected Host EnvContext instead of non-deterministic SystemTime
-                let host_timestamp = 1773610000; // Simulated injected env.latest_block_timestamp
+                let host_timestamp = self.env.latest_block_timestamp;
                 let intent_ts = if input_tensors.is_empty() { 0.0 } else { input_tensors[0].try_as_scalar().unwrap_or(0.0) };
                 let drift_seconds = (host_timestamp as f32) - intent_ts;
                 Ok(Tensor::scalar(drift_seconds.max(0.0), 1.0))
             }
             Op::StateChannelSign => {
-                // Multisig state proof generation in memory
+                // Multisig state proof generation via HostCallback
                 if input_tensors.len() < 2 {
                     return Err(VMError::WrongInputCount { expected: 2, got: input_tensors.len() });
                 }
-                let state_hash = "0xmockstateproof";
-                Ok(Tensor::string(state_hash, 1.0))
+                
+                // Convert inputs to a deterministically sortable string representation of state
+                let state_data = format!("{:?}", input_tensors);
+                
+                let signature = if let Some(ref cb) = self.host_callback {
+                    cb.sign_state_channel(&state_data).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: e })?
+                } else {
+                    return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No host callback configured for StateChannelSign".into() });
+                };
+                
+                Ok(Tensor::string(&signature, 1.0))
             }
             Op::ExtractASTHash => {
                 // Structural entropy hashing
