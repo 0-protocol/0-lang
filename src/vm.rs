@@ -8,10 +8,16 @@ pub trait HostCallback: Send + Sync {
 
 pub struct EnvContext {
     pub latest_block_timestamp: u64,
+    /// 🛡️ Grey Goo Defense: Tracks the mutation generation of the AST.
+    /// If generation > 3 without economic work, VM halts.
+    pub entropy_generation: u8,
 }
 impl Default for EnvContext {
     fn default() -> Self {
-        Self { latest_block_timestamp: 0 } // Defaults to 0 for strict testing
+        Self { 
+            latest_block_timestamp: 0,
+            entropy_generation: 0,
+        } // Defaults to 0 for strict testing
     }
 }
 //! VM - The ZeroLang Virtual Machine
@@ -1032,10 +1038,20 @@ impl VM {
             }
             
             Op::EmbedDistance => {
-                // Semantic Entanglement: Cosine Similarity
-                if input_tensors.len() != 2 {
-                    return Err(VMError::WrongInputCount { expected: 2, got: input_tensors.len() });
+                // 🛡️ Semantic Poisoning Defense: Require 3 inputs (Vector A, Vector B, Model_ID_Hash)
+                // Agents MUST prove they are operating in the same high-dimensional coordinate system.
+                if input_tensors.len() != 3 {
+                    return Err(VMError::WrongInputCount { expected: 3, got: input_tensors.len() });
                 }
+                
+                let a_model = input_tensors[2].try_as_scalar_string().map_err(Self::tensor_err)?;
+                if a_model != "bge-m3-v1" { // In production, this checks a registry of approved coordinate systems
+                    return Err(VMError::ExternalResolutionFailed {
+                        uri: "SemanticRegistry".into(),
+                        reason: format!("Model ID mismatch or unsupported embedding space: {}", a_model)
+                    });
+                }
+
                 let a_data = input_tensors[0].data();
                 let b_data = input_tensors[1].data();
                 
@@ -1067,10 +1083,16 @@ impl VM {
                 Ok(Tensor::scalar(1.0, 1.0))
             }
             Op::MutateAST => {
-                // Architect Review: Do NOT mutate the executing graph (breaks topological sort).
-                // Instead, output a new AST blueprint hash that the Host can instantiate in a new VM.
-                let new_blueprint = "0x_mutated_ast_v2";
-                Ok(Tensor::string(new_blueprint, 1.0))
+                // 🛡️ Grey Goo Defense: Enforce Entropy Cap
+                if self.env.entropy_generation >= 3 {
+                    return Err(VMError::ExternalResolutionFailed { 
+                        uri: "EntropyCap".into(), 
+                        reason: "Agent mutation generation exceeded limit (max 3). Grey Goo protocol triggered: halting reproduction.".into() 
+                    });
+                }
+                // Output a new AST blueprint hash and increment the generation counter for the child
+                let new_blueprint = format!("0x_mutated_ast_gen_{}", self.env.entropy_generation + 1);
+                Ok(Tensor::string(&new_blueprint, 1.0))
             }
             Op::ExtractASTHash => {
                 // Structural entropy hashing
