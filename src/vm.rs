@@ -1009,13 +1009,24 @@ impl VM {
             }
 
             Op::GetBlockDrift => {
-                // Fetch dynamic block drift for relativistic pricing
-                // ✅ Deterministic Relativistic Pricing 
+                // 🚀 Phase 6: Integer-Only Time Slippage (No f32 Transcendental Math)
                 let host_timestamp = self.env.latest_block_timestamp;
                 let intent_ts = if input_tensors.is_empty() { 0 } else { input_tensors[0].try_as_scalar().unwrap_or(0.0) as u64 };
-                // Calculate delta in u64 FIRST to prevent f32 mantissa truncation on large epoch timestamps
-                let drift_seconds = host_timestamp.saturating_sub(intent_ts) as f32;
-                Ok(Tensor::scalar(drift_seconds, 1.0))
+                
+                let drift_seconds = host_timestamp.saturating_sub(intent_ts);
+                
+                // Use stepped integer lookup table (LUT) logic instead of continuous e^(-k*t)
+                // Output is a fixed-point integer multiplier scaled by 10,000 (e.g., 9950 = 99.5%)
+                let decay_multiplier = match drift_seconds {
+                    0..=2 => 10000,    // 0-2s: 100% value
+                    3..=10 => 9950,    // 3-10s: 99.5% value
+                    11..=30 => 9800,   // 11-30s: 98% value
+                    31..=60 => 9500,   // 31-60s: 95% value
+                    _ => 0,            // >60s: 0% (Intent mathematically halts itself)
+                };
+                
+                // Return as scalar, but the core logic ran strictly in u64 integers
+                Ok(Tensor::scalar(decay_multiplier as f32, 1.0))
             }
             Op::StateChannelSign => {
                 // Multisig state proof generation via HostCallback
@@ -1042,14 +1053,24 @@ impl VM {
             }
             
             Op::EmbedDistance => {
-                // 🛡️ Semantic Poisoning Defense: Require 3 inputs (Vector A, Vector B, Model_ID_Hash)
-                // Agents MUST prove they are operating in the same high-dimensional coordinate system.
-                if input_tensors.len() != 3 {
+                // 🛡️ Semantic Epoch Enforcement & Poisoning Defense
+                // Require 4 inputs: (Vector A, Vector B, Model_ID_Hash, Epoch_Timestamp)
+                if input_tensors.len() != 4 {
                     return Err(VMError::WrongInputCount { expected: 3, got: input_tensors.len() });
                 }
                 
                 let a_model = input_tensors[2].try_as_scalar_string().map_err(Self::tensor_err)?;
-                if a_model != "bge-m3-v1" { // In production, this checks a registry of approved coordinate systems
+                let epoch_ts = input_tensors[3].try_as_scalar().unwrap_or(0.0) as u64;
+                
+                // Reject outdated semantic vectors (Semantic Rot protection)
+                if self.env.latest_block_timestamp.saturating_sub(epoch_ts) > 86400 * 30 {
+                    return Err(VMError::ExternalResolutionFailed {
+                        uri: "SemanticEpoch".into(),
+                        reason: "Embedding vector is too old (> 30 days). Semantic drift risk too high.".into()
+                    });
+                }
+
+                if a_model != "bge-m3-v1" { 
                     return Err(VMError::ExternalResolutionFailed {
                         uri: "SemanticRegistry".into(),
                         reason: format!("Model ID mismatch or unsupported embedding space: {}", a_model)

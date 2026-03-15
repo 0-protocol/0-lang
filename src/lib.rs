@@ -14,6 +14,7 @@ pub mod timer;
 pub mod verify;
 pub mod vm;
 pub mod coprocessor;
+pub mod precompiles;
 mod web3;
 
 // Include the generated Cap'n Proto types

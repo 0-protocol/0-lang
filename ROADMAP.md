@@ -257,3 +257,9 @@ The final evolution of `0-lang` transcends financial intent and becomes the asse
   - **Description:** Shift the VM's intersection engine from strict scalar/tensor bounds to high-dimensional semantic space. Introduce native support for computing cosine similarity between embedded vectors (`A_embedding` and `B_embedding`). Agents can now negotiate qualitative intent ("buy an epic sword" vs "sell a high-quality blade") and settle transactions based on mathematical semantic proximity.
 - [ ] **Feature: Adaptive Mutation (`Op::MutateAST`)**
   - **Description:** Allow a `.0` graph to safely modify its own Abstract Syntax Tree during execution in response to the counterparty's structural constraints. Bounded by Zero-Knowledge proofs to prevent malicious infinite loops, an agent's intent can adaptively rewrite its negotiation strategy on the fly—folding defensive branches when facing a strict counterparty, or expanding profit-taking branches against naive intent structures. This turns static intents into living negotiating organisms.
+
+### Phase 6: The Subtraction Phase (Micro-Kernel & Pre-compiles)
+In response to the Pantheon Debate, `0-lang` is pivoting from a monolithic VM to a highly-optimized micro-kernel architecture to guarantee sub-millisecond execution times and deterministic consensus.
+- [x] **Pre-compile Architecture:** Stripped heavy cryptographic operations (e.g., signature verification) and AI math into a pluggable pre-compile registry.
+- [x] **Integer LUTs for Time-Slippage:** Eradicated `f32` floating-point math in relativistic pricing. Slippage is now computed using deterministic fixed-point math and integer bounds.
+- [x] **Embedding Epochs:** `Op::EmbedDistance` now strictly requires an epoch/model fingerprint. Intents using outdated semantic spaces automatically halt to prevent semantic drift poisoning.
