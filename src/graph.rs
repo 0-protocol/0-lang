@@ -1038,6 +1038,7 @@ impl RuntimeGraph {
                 match node {
                     RuntimeNode::Operation { op: _, inputs } => {
                         hasher.update(&[0x01]); // Op marker
+                        hasher.update(format!("{:?}", op).as_bytes()); // Deterministic AST operation string
                         hasher.update(&(inputs.len() as u32).to_le_bytes());
                         for input in inputs {
                             hasher.update(&input.0);

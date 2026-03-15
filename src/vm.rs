@@ -170,6 +170,8 @@ impl ExternalResolver for MockResolver {
 
 /// The ZeroLang Virtual Machine
 pub struct VM {
+    pub max_memory_bytes: usize,
+    pub current_memory_bytes: usize,
     /// Memory: stores computed tensor values by node hash
     memory: HashMap<NodeHash, Tensor>,
     /// Execution fuel (max operations before halt)
@@ -187,7 +189,9 @@ impl VM {
     pub fn new() -> Self {
         Self {
             memory: HashMap::new(),
-            fuel: 1_000_000, // Default: 1 million operations
+            fuel: 1_000_000,
+            max_memory_bytes: 64 * 1024 * 1024, // 64MB hard limit
+            current_memory_bytes: 0, // Default: 1 million operations
             ops_executed: 0,
             external_resolver: None,
             state: HashMap::new(),
@@ -201,6 +205,8 @@ impl VM {
         Self {
             memory: HashMap::new(),
             fuel,
+            max_memory_bytes: 64 * 1024 * 1024,
+            current_memory_bytes: 0,
             ops_executed: 0,
             external_resolver: None,
             state: HashMap::new(),
@@ -996,9 +1002,10 @@ impl VM {
                 // Fetch dynamic block drift for relativistic pricing
                 // ✅ Deterministic Relativistic Pricing 
                 let host_timestamp = self.env.latest_block_timestamp;
-                let intent_ts = if input_tensors.is_empty() { 0.0 } else { input_tensors[0].try_as_scalar().unwrap_or(0.0) };
-                let drift_seconds = (host_timestamp as f32) - intent_ts;
-                Ok(Tensor::scalar(drift_seconds.max(0.0), 1.0))
+                let intent_ts = if input_tensors.is_empty() { 0 } else { input_tensors[0].try_as_scalar().unwrap_or(0.0) as u64 };
+                // Calculate delta in u64 FIRST to prevent f32 mantissa truncation on large epoch timestamps
+                let drift_seconds = host_timestamp.saturating_sub(intent_ts) as f32;
+                Ok(Tensor::scalar(drift_seconds, 1.0))
             }
             Op::StateChannelSign => {
                 // Multisig state proof generation via HostCallback
@@ -1006,11 +1013,17 @@ impl VM {
                     return Err(VMError::WrongInputCount { expected: 2, got: input_tensors.len() });
                 }
                 
-                // Convert inputs to a deterministically sortable string representation of state
-                let state_data = format!("{:?}", input_tensors);
+                // Deterministic Binary Serialization for Signatures (Borsh/BCS equivalent via direct byte packing)
+                let mut bytes = Vec::new();
+                for t in input_tensors {
+                    for &d in t.shape() { bytes.extend_from_slice(&d.to_le_bytes()); }
+                    for &v in t.data() { bytes.extend_from_slice(&v.to_bits().to_le_bytes()); }
+                }
+                use sha3::{Digest, Keccak256};
+                let state_hash_hex = hex::encode(Keccak256::digest(&bytes));
                 
                 let signature = if let Some(ref cb) = self.host_callback {
-                    cb.sign_state_channel(&state_data).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: e })?
+                    cb.sign_state_channel(&state_hash_hex).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: e })?
                 } else {
                     return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No host callback configured for StateChannelSign".into() });
                 };
