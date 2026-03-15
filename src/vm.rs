@@ -456,7 +456,7 @@ impl VM {
             default
         } else {
             &result.selected_route.as_ref()
-                .ok_or_else(|| VMError::ExecutionError("Router did not use default but returned no selected route".into()))?
+                .ok_or_else(|| VMError::TensorError("Router did not use default but returned no selected route".into()))?
                 .target
         };
 
@@ -996,12 +996,13 @@ impl VM {
                     Err(_) => return Ok(Tensor::scalar(0.0, 1.0)),
                 };
                 
-                let vk = match VerifyingKey::recover_from_prehash(&message_bytes, &sig, recid) {
+                let vk: VerifyingKey = match VerifyingKey::recover_from_prehash(&message_bytes, &sig, recid) {
                     Ok(k) => k,
                     Err(_) => return Ok(Tensor::scalar(0.0, 1.0)),
                 };
                 
-                let pubkey_bytes = &vk.to_encoded_point(false).as_bytes()[1..];
+                let encoded = vk.to_encoded_point(false);
+                let pubkey_bytes = &encoded.as_bytes()[1..];
                 let mut hasher = Keccak256::new();
                 hasher.update(pubkey_bytes);
                 let recovered_address = &hasher.finalize()[12..32];
