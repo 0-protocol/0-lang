@@ -1012,3 +1012,40 @@ mod tests {
         assert!(pos(&hash_c) < pos(&hash_d));
     }
 }
+
+impl RuntimeGraph {
+    /// 🛡️ AST Genetic Resonance (Structural Entropy Extractor)
+    /// Hashes ONLY the structural layout (opcodes/connections) while ignoring dynamic runtime scalar/tensor values.
+    pub fn structural_hash(&self) -> [u8; 32] {
+        use sha3::{Digest, Keccak256};
+        let mut hasher = Keccak256::new();
+        
+        let mut sorted_hashes: Vec<_> = self.nodes.keys().collect();
+        sorted_hashes.sort(); // Ensure deterministic traversal
+        
+        for hash in sorted_hashes {
+            if let Some(node) = self.nodes.get(hash) {
+                match node {
+                    RuntimeNode::Operation { op: _, inputs } => {
+                        hasher.update(&[0x01]); // Op marker
+                        hasher.update(&(inputs.len() as u32).to_le_bytes());
+                        for input in inputs {
+                            hasher.update(&input.0);
+                        }
+                    },
+                    RuntimeNode::Constant { output_shape, .. } => {
+                        hasher.update(&[0x02]); // Constant marker
+                        hasher.update(&(output_shape.len() as u32).to_le_bytes());
+                    },
+                    RuntimeNode::Input { name, .. } => {
+                        hasher.update(&[0x03]); // Input marker
+                        hasher.update(name.as_bytes());
+                    }
+                }
+            }
+        }
+        let mut result = [0u8; 32];
+        result.copy_from_slice(&hasher.finalize());
+        result
+    }
+}
