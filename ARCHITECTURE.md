@@ -279,3 +279,6 @@ To solve the fundamental conflict between VM execution speed (sub-millisecond re
 1. **Optimistic Execution:** The core `VM` executes the AST graph in bare-metal Rust, outputting an `ExecutionTrace` in < 1ms. The solver immediately broadcasts a lock on the P2P network.
 2. **Pessimistic Settlement:** The `ExecutionTrace` is handed off to a background `ZkCoprocessor` (e.g., Risc0/SP1 hardware cluster). The coprocessor asynchronously generates a SNARK/STARK proof without blocking the VM's main thread.
 3. The proof is submitted to the Base Mainnet Escrow contract for trustless verification and settlement.
+
+### 3.5 The Reality Patch: Delegated Solver Sequencers (DSS)
+To prevent the P2P network from degenerating into a chaotic Priority Gas Auction (PGA) where agents cannibalize liquidity spreads, `0-lang` relies on a Delegated Solver Sequencer (DSS) model. Agents compute the `Op::StateChannelSign` intersection locally, but must submit the resulting Multisig State Proof to a staked, elected Sequencer node. This guarantees atomic settlement without MEV extraction or transaction race conditions on the base layer.

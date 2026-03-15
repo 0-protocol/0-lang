@@ -11,12 +11,16 @@ pub struct EnvContext {
     /// 🛡️ Grey Goo Defense: Tracks the mutation generation of the AST.
     /// If generation > 3 without economic work, VM halts.
     pub entropy_generation: u8,
+    /// 🔗 Deterministic Oracle Snapshot: Required for ZK proofs. 
+    /// The VM cannot make external HTTP calls; it must verify against this injected state root.
+    pub oracle_state_root: [u8; 32],
 }
 impl Default for EnvContext {
     fn default() -> Self {
         Self { 
             latest_block_timestamp: 0,
             entropy_generation: 0,
+            oracle_state_root: [0; 32],
         } // Defaults to 0 for strict testing
     }
 }
