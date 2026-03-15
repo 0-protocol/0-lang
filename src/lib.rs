@@ -13,6 +13,7 @@ pub mod tensor;
 pub mod timer;
 pub mod verify;
 pub mod vm;
+pub mod coprocessor;
 mod web3;
 
 // Include the generated Cap'n Proto types

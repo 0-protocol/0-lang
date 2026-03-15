@@ -273,3 +273,9 @@ zero optimize <input.0> <output.0>    # Graph optimization
 *Architecture for machines, by machines.*
 
 </div>
+
+### 3.4 Asynchronous ZK Coprocessor (Optimistic Execution, Pessimistic Settlement)
+To solve the fundamental conflict between VM execution speed (sub-millisecond required for high-frequency P2P dark pools) and Zero-Knowledge proving overhead (seconds to minutes), `0-lang` implements an Asynchronous ZK Coprocessor architecture.
+1. **Optimistic Execution:** The core `VM` executes the AST graph in bare-metal Rust, outputting an `ExecutionTrace` in < 1ms. The solver immediately broadcasts a lock on the P2P network.
+2. **Pessimistic Settlement:** The `ExecutionTrace` is handed off to a background `ZkCoprocessor` (e.g., Risc0/SP1 hardware cluster). The coprocessor asynchronously generates a SNARK/STARK proof without blocking the VM's main thread.
+3. The proof is submitted to the Base Mainnet Escrow contract for trustless verification and settlement.
