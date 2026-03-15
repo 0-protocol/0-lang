@@ -150,6 +150,10 @@ pub enum Op {
     OracleRead,   // Read oracle/contract state via EVM eth_call
     GetGasPrice,  // Fetch EVM gas price quote
     VerifySignature,
+    GetBlockDrift,    // Fetch block time drift vs current timestamp
+    StateChannelSign, // Evaluate and sign matched ASTs
+    ExtractASTHash,   // Hash the structural AST skeleton
+
     // Confidence operations (for AI assistant applications)
     ConfidenceCombine,    // Combine multiple confidence scores
     ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
@@ -203,6 +207,9 @@ impl Op {
             Operation::OracleRead => Ok(Op::OracleRead),
             Operation::GetGasPrice => Ok(Op::GetGasPrice),
             Operation::VerifySignature => Ok(Op::VerifySignature),
+            Operation::GetBlockDrift => Ok(Op::GetBlockDrift),
+            Operation::StateChannelSign => Ok(Op::StateChannelSign),
+            Operation::ExtractAstHash => Ok(Op::ExtractASTHash),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
             Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),

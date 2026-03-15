@@ -962,6 +962,26 @@ impl VM {
                 self.execute_confidence_decay(input_tensors[0], decay_factor)
             }
 
+            Op::GetBlockDrift => {
+                // Fetch dynamic block drift for relativistic pricing
+                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f32;
+                // In a production node, this would consult the actual base chain tip timestamp
+                let simulated_drift = 500.0; // 500ms drift stub
+                Ok(Tensor::scalar(simulated_drift, 1.0))
+            }
+            Op::StateChannelSign => {
+                // Multisig state proof generation in memory
+                if input_tensors.len() < 2 {
+                    return Err(VMError::WrongInputCount { expected: 2, got: input_tensors.len() });
+                }
+                let state_hash = "0xmockstateproof";
+                Ok(Tensor::string(state_hash, 1.0))
+            }
+            Op::ExtractASTHash => {
+                // Structural entropy hashing
+                let mock_structural_hash = "0xdeadbeefast";
+                Ok(Tensor::string(mock_structural_hash, 1.0))
+            }
             Op::VerifySignature => {
                 if input_tensors.len() != 3 {
                     return Err(VMError::WrongInputCount {

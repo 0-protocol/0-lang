@@ -171,6 +171,10 @@ enum Operation {
 
   # Cryptographic Data Verification
   verifySignature @32; # Validate cryptographic oracle proof
+  getBlockDrift @37;
+  stateChannelSign @38;
+  extractASTHash @39;
+
 
   # Confidence operations (for agent routing and trust composition)
   confidenceCombine @33;
