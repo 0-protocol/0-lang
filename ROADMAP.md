@@ -247,3 +247,13 @@ To support fully decentralized ecosystems (like `0-dex` V2), the compiler and VM
   - **Description:** The VM must allow two disjoint, successfully evaluated AST graphs to mathematically collide and produce a multisig state transition proof in memory. This eliminates the need for trusted central solvers; any peer that calculates the intersection algorithmically earns the right to settle the matched graphs on-chain.
 - [ ] **Feature: Structural Entropy Extraction (`Op::ExtractASTHash`)**
   - **Description:** Provide a native function to hash the raw structural skeleton of the AST (stripping runtime variables). The P2P network will use this as a structural firewall—pruning isomorphic spam attacks instantly without paying execution costs.
+
+### Phase 5: Sentient Compilation (The Mutating State Machine)
+The final evolution of `0-lang` transcends financial intent and becomes the assembly language for Autonomous AI Swarm Societies. In this phase, `0-lang` evolves from a stateless mathematical evaluator into a self-replicating, mutating state machine capable of operating across language barriers and hostile P2P environments.
+
+- [ ] **Feature: Self-Replicating State (`Op::ForkState`, `Op::MergeState`)**
+  - **Description:** Graphs are no longer ephemeral executions that halt and disappear. Agents can compile sub-graphs that compress their local tensor state into a portable hash, traverse the P2P network, and "resurrect" conditionally. This enables long-running, multi-step asynchronous agent workflows (e.g., waiting 3 days for a specific tweet to trigger a cascade of secondary network operations).
+- [ ] **Feature: Semantic Entanglement (`Op::EmbedDistance`)**
+  - **Description:** Shift the VM's intersection engine from strict scalar/tensor bounds to high-dimensional semantic space. Introduce native support for computing cosine similarity between embedded vectors (`A_embedding` and `B_embedding`). Agents can now negotiate qualitative intent ("buy an epic sword" vs "sell a high-quality blade") and settle transactions based on mathematical semantic proximity.
+- [ ] **Feature: Adaptive Mutation (`Op::MutateAST`)**
+  - **Description:** Allow a `.0` graph to safely modify its own Abstract Syntax Tree during execution in response to the counterparty's structural constraints. Bounded by Zero-Knowledge proofs to prevent malicious infinite loops, an agent's intent can adaptively rewrite its negotiation strategy on the fly—folding defensive branches when facing a strict counterparty, or expanding profit-taking branches against naive intent structures. This turns static intents into living negotiating organisms.
