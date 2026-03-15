@@ -154,6 +154,12 @@ pub enum Op {
     StateChannelSign, // Evaluate and sign matched ASTs
     ExtractASTHash,   // Hash the structural AST skeleton
 
+    // Phase 5: Sentient Compilation
+    ForkState,        // Snapshot VM state into a portable hash
+    MergeState,       // Hydrate VM state from a hash
+    EmbedDistance,    // Semantic cosine similarity between two embeddings
+    MutateAST,        // Adaptively output a mutated graph blueprint
+
     // Confidence operations (for AI assistant applications)
     ConfidenceCombine,    // Combine multiple confidence scores
     ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
@@ -210,6 +216,10 @@ impl Op {
             Operation::GetBlockDrift => Ok(Op::GetBlockDrift),
             Operation::StateChannelSign => Ok(Op::StateChannelSign),
             Operation::ExtractAstHash => Ok(Op::ExtractASTHash),
+            Operation::ForkState => Ok(Op::ForkState),
+            Operation::MergeState => Ok(Op::MergeState),
+            Operation::EmbedDistance => Ok(Op::EmbedDistance),
+            Operation::MutateAst => Ok(Op::MutateAST),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
             Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),

@@ -175,6 +175,12 @@ enum Operation {
   stateChannelSign @38;
   extractASTHash @39;
 
+  # Phase 5: Sentient Compilation
+  forkState @40;
+  mergeState @41;
+  embedDistance @42;
+  mutateAST @43;
+
 
   # Confidence operations (for agent routing and trust composition)
   confidenceCombine @33;
