@@ -182,7 +182,7 @@ enum Operation {
   mutateAST @43;
 
   # Phase 8: The Synaptic Interface
-  promptInvoke @44;
+  verifyCognition @44;
   streamIngest @45;
 
 

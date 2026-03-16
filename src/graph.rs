@@ -161,7 +161,7 @@ pub enum Op {
     MutateAST,        // Adaptively output a mutated graph blueprint
 
     // Phase 8: The Synaptic Interface
-    PromptInvoke,     // Pause VM and request LLM chain-of-thought completion
+    VerifyCognition,  // Validate pre-computed, cryptographically signed LLM reasoning
     StreamIngest,     // Multimodal pointer resolution (video/audio/text streams)
 
     // Confidence operations (for AI assistant applications)
@@ -224,7 +224,7 @@ impl Op {
             Operation::MergeState => Ok(Op::MergeState),
             Operation::EmbedDistance => Ok(Op::EmbedDistance),
             Operation::MutateAst => Ok(Op::MutateAST),
-            Operation::PromptInvoke => Ok(Op::PromptInvoke),
+            Operation::VerifyCognition => Ok(Op::VerifyCognition),
             Operation::StreamIngest => Ok(Op::StreamIngest),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),

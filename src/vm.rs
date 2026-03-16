@@ -5,11 +5,9 @@
 pub trait HostCallback: Send + Sync {
     fn sign_state_channel(&self, state_hash: &str) -> Result<String, String>;
     
-    // Phase 8: Synaptic Callbacks
-    /// Suspends deterministic execution to ask the probabilistic LLM host for a decision
-    fn prompt_invoke(&self, prompt: &str) -> Result<String, String>;
-    /// Resolves a multimodal stream URI (e.g., live market feed, video) into a workable tensor
-    fn stream_ingest(&self, uri: &str) -> Result<Vec<f32>, String>;
+    // Phase 9: Synaptic Callbacks (Cognitive Entanglement)
+    /// Resolves a multimodal stream URI strictly bound to a cryptographic epoch hash
+    fn stream_ingest(&self, uri: &str, epoch_hash: &str) -> Result<Vec<f32>, String>;
 }
 
 pub struct EnvContext {
@@ -1132,35 +1130,35 @@ impl VM {
                 Ok(Tensor::string(mock_structural_hash, 1.0))
             }
             
-            Op::PromptInvoke => {
-                // 🧠 Phase 8: Dynamic Reasoning Loop
-                if input_tensors.is_empty() {
-                    return Err(VMError::ExternalResolutionFailed { uri: "PromptInvoke".into(), reason: "Missing prompt input".into() });
+            Op::VerifyCognition => {
+                // 🧠 Phase 9: Pre-Cognition Commitments (Sun Jury Resolution)
+                // We DO NOT invoke the LLM during execution to prevent consensus forks.
+                // Instead, we verify a static tensor containing the pre-computed LLM trace and its signature.
+                if input_tensors.len() < 2 {
+                    return Err(VMError::ExternalResolutionFailed { uri: "VerifyCognition".into(), reason: "Missing cognition trace or signature".into() });
                 }
-                let prompt = input_tensors[0].try_as_scalar_string().map_err(Self::tensor_err)?;
-                
-                let response = if let Some(ref cb) = self.host_callback {
-                    cb.prompt_invoke(&prompt).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback::PromptInvoke".into(), reason: e })?
-                } else {
-                    return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No LLM host configured for PromptInvoke".into() });
-                };
-                
-                Ok(Tensor::string(&response, 1.0))
+                // (Stubbed verification) In production, verify the enclave signature of the cognitive trace
+                let cognition_valid = true;
+                if !cognition_valid {
+                    return Err(VMError::ExternalResolutionFailed { uri: "VerifyCognition".into(), reason: "Cognitive trace signature invalid".into() });
+                }
+                Ok(Tensor::scalar(1.0, 1.0))
             }
             Op::StreamIngest => {
-                // 🌊 Phase 8: Multimodal Pointers
-                if input_tensors.is_empty() {
-                    return Err(VMError::ExternalResolutionFailed { uri: "StreamIngest".into(), reason: "Missing URI input".into() });
+                // 🌊 Phase 9: Merkle-Stream Epochs (Sun Jury Resolution)
+                // Streams must be cryptographically frozen slices of the multiverse, not live URIs.
+                if input_tensors.len() < 2 {
+                    return Err(VMError::ExternalResolutionFailed { uri: "StreamIngest".into(), reason: "Missing URI or Epoch Hash".into() });
                 }
                 let uri = input_tensors[0].try_as_scalar_string().map_err(Self::tensor_err)?;
+                let epoch_hash = input_tensors[1].try_as_scalar_string().map_err(Self::tensor_err)?;
                 
                 let stream_data = if let Some(ref cb) = self.host_callback {
-                    cb.stream_ingest(&uri).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback::StreamIngest".into(), reason: e })?
+                    cb.stream_ingest(&uri, &epoch_hash).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback::StreamIngest".into(), reason: e })?
                 } else {
                     return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No multimodal host configured for StreamIngest".into() });
                 };
                 
-                // Return dynamic tensor from stream
                 Ok(Tensor::new(vec![stream_data.len() as u32], stream_data))
             }
             Op::VerifySignature => {
