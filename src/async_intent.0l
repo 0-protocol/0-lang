@@ -1,0 +1,13 @@
+// Phase 18: Async Intent Blocks & Revertable States
+
+struct AsyncIntentBlock {
+    intent_id: u64,
+    payload: IntentVector,
+    rollback_fn: fn() -> (),
+}
+
+impl AsyncIntentBlock {
+    pub fn execute_non_blocking(&self) {
+        // Dispatch to swarm without awaiting lock
+    }
+}
