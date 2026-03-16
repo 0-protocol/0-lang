@@ -185,6 +185,10 @@ enum Operation {
   verifyCognition @44;
   streamIngest @45;
 
+  # Phase 10: Sovereign Root of Trust
+  verifyAgentIdentity @46;
+  getIntentLineage @47;
+
 
   # Confidence operations (for agent routing and trust composition)
   confidenceCombine @33;

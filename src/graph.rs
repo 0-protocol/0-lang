@@ -164,6 +164,10 @@ pub enum Op {
     VerifyCognition,  // Validate pre-computed, cryptographically signed LLM reasoning
     StreamIngest,     // Multimodal pointer resolution (video/audio/text streams)
 
+    // Phase 10: Sovereign Root of Trust
+    VerifyAgentIdentity, // Validate agent DID across decentralized registries
+    GetIntentLineage,    // Extract the cryptographic lineage of the intent generation
+
     // Confidence operations (for AI assistant applications)
     ConfidenceCombine,    // Combine multiple confidence scores
     ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
@@ -226,6 +230,8 @@ impl Op {
             Operation::MutateAst => Ok(Op::MutateAST),
             Operation::VerifyCognition => Ok(Op::VerifyCognition),
             Operation::StreamIngest => Ok(Op::StreamIngest),
+            Operation::VerifyAgentIdentity => Ok(Op::VerifyAgentIdentity),
+            Operation::GetIntentLineage => Ok(Op::GetIntentLineage),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
             Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),
