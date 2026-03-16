@@ -4,6 +4,12 @@
 
 pub trait HostCallback: Send + Sync {
     fn sign_state_channel(&self, state_hash: &str) -> Result<String, String>;
+    
+    // Phase 8: Synaptic Callbacks
+    /// Suspends deterministic execution to ask the probabilistic LLM host for a decision
+    fn prompt_invoke(&self, prompt: &str) -> Result<String, String>;
+    /// Resolves a multimodal stream URI (e.g., live market feed, video) into a workable tensor
+    fn stream_ingest(&self, uri: &str) -> Result<Vec<f32>, String>;
 }
 
 pub struct EnvContext {
@@ -1124,6 +1130,38 @@ impl VM {
                 // Structural entropy hashing
                 let mock_structural_hash = "0xdeadbeefast";
                 Ok(Tensor::string(mock_structural_hash, 1.0))
+            }
+            
+            Op::PromptInvoke => {
+                // 🧠 Phase 8: Dynamic Reasoning Loop
+                if input_tensors.is_empty() {
+                    return Err(VMError::ExternalResolutionFailed { uri: "PromptInvoke".into(), reason: "Missing prompt input".into() });
+                }
+                let prompt = input_tensors[0].try_as_scalar_string().map_err(Self::tensor_err)?;
+                
+                let response = if let Some(ref cb) = self.host_callback {
+                    cb.prompt_invoke(&prompt).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback::PromptInvoke".into(), reason: e })?
+                } else {
+                    return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No LLM host configured for PromptInvoke".into() });
+                };
+                
+                Ok(Tensor::string(&response, 1.0))
+            }
+            Op::StreamIngest => {
+                // 🌊 Phase 8: Multimodal Pointers
+                if input_tensors.is_empty() {
+                    return Err(VMError::ExternalResolutionFailed { uri: "StreamIngest".into(), reason: "Missing URI input".into() });
+                }
+                let uri = input_tensors[0].try_as_scalar_string().map_err(Self::tensor_err)?;
+                
+                let stream_data = if let Some(ref cb) = self.host_callback {
+                    cb.stream_ingest(&uri).map_err(|e| VMError::ExternalResolutionFailed { uri: "HostCallback::StreamIngest".into(), reason: e })?
+                } else {
+                    return Err(VMError::ExternalResolutionFailed { uri: "HostCallback".into(), reason: "No multimodal host configured for StreamIngest".into() });
+                };
+                
+                // Return dynamic tensor from stream
+                Ok(Tensor::new(vec![stream_data.len() as u32], stream_data))
             }
             Op::VerifySignature => {
                 if input_tensors.len() != 3 {

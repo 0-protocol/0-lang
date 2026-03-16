@@ -160,6 +160,10 @@ pub enum Op {
     EmbedDistance,    // Semantic cosine similarity between two embeddings
     MutateAST,        // Adaptively output a mutated graph blueprint
 
+    // Phase 8: The Synaptic Interface
+    PromptInvoke,     // Pause VM and request LLM chain-of-thought completion
+    StreamIngest,     // Multimodal pointer resolution (video/audio/text streams)
+
     // Confidence operations (for AI assistant applications)
     ConfidenceCombine,    // Combine multiple confidence scores
     ConfidenceThreshold,  // Output 1.0 if above threshold, 0.0 otherwise
@@ -220,6 +224,8 @@ impl Op {
             Operation::MergeState => Ok(Op::MergeState),
             Operation::EmbedDistance => Ok(Op::EmbedDistance),
             Operation::MutateAst => Ok(Op::MutateAST),
+            Operation::PromptInvoke => Ok(Op::PromptInvoke),
+            Operation::StreamIngest => Ok(Op::StreamIngest),
             // Confidence operations
             Operation::ConfidenceCombine => Ok(Op::ConfidenceCombine),
             Operation::ConfidenceThreshold => Ok(Op::ConfidenceThreshold),

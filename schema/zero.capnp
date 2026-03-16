@@ -181,6 +181,10 @@ enum Operation {
   embedDistance @42;
   mutateAST @43;
 
+  # Phase 8: The Synaptic Interface
+  promptInvoke @44;
+  streamIngest @45;
+
 
   # Confidence operations (for agent routing and trust composition)
   confidenceCombine @33;

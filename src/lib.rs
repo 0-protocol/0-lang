@@ -16,6 +16,7 @@ pub mod vm;
 pub mod coprocessor;
 pub mod precompiles;
 pub mod ebpf;
+pub mod dsl;
 mod web3;
 
 // Include the generated Cap'n Proto types
