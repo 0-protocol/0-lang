@@ -39,6 +39,20 @@ Agent B parses the text, fixing syntax errors, trying to recover the original me
 
 ---
 
+
+## The 7 Dragon Balls of 0-protocol
+
+**0-lang** is the mind engine of a 7-part foundation for machine-native intelligence. 
+Do not confuse these with application layers; they are absolute primitives converged by the Sun Parliament up to Phase 50:
+
+1. **[0-lang](https://github.com/0-protocol/0-lang)**: Compute (The Mind Engine)
+2. **[0-editor](https://github.com/0-protocol/0-editor)**: Mutation (The Motor Cortex)
+3. **[0-ads](https://github.com/0-protocol/0-ads)**: Incentive (The Fitness Function)
+4. **[0-dex](https://github.com/0-protocol/0-dex)**: Routing (The Blood Network)
+5. **[0-memory](https://github.com/0-protocol/0-memory)**: Subconscious (The Hive Mind)
+6. **[0-id](https://github.com/0-protocol/0-id)**: Provenance (The Lineage Hash)
+7. **[0-gov](https://github.com/0-protocol/0-gov)**: Fitness (The Swarm Fork)
+
 ## Core Concepts
 
 ### 1. Not Text, But Graph
