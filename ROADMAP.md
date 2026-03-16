@@ -263,3 +263,11 @@ In response to the Pantheon Debate, `0-lang` is pivoting from a monolithic VM to
 - [x] **Pre-compile Architecture:** Stripped heavy cryptographic operations (e.g., signature verification) and AI math into a pluggable pre-compile registry.
 - [x] **Integer LUTs for Time-Slippage:** Eradicated `f32` floating-point math in relativistic pricing. Slippage is now computed using deterministic fixed-point math and integer bounds.
 - [x] **Embedding Epochs:** `Op::EmbedDistance` now strictly requires an epoch/model fingerprint. Intents using outdated semantic spaces automatically halt to prevent semantic drift poisoning.
+
+### Phase 7: The Cybernetic Epoch (eBPF & Logical Clocks)
+Born from the collective critique of distributed systems and AI alignment pioneers, Phase 7 elevates `0-lang` to a bare-metal Cybernetic OS.
+- [ ] **eBPF JIT Engine:** Deprecate the custom Rust VM `match` loop. Compile `.0` ASTs to eBPF bytecode for ring-0 execution with SIMD-aligned memory arenas.
+- [ ] **Canonical IR Normalization:** Neutralize commutative AST attacks (e.g., A+B vs B+A) by sorting trees lexicographically before generating the structural Sybil hash.
+- [ ] **Lamport Logical Clocks:** Replace physical block timestamps (`GetBlockDrift`) with vector clocks to measure causal P2P distance, paired with continuous fixed-point math for slippage (eliminating LUT cliff-edge MEV).
+- [ ] **Bitswap Payload Decoupling:** Gossipsub handles only AST CIDs; massive semantic embedding tensors are fetched async via Merkle-DAG streams.
+- [ ] **State Rent & Ephemeral Privacy:** Dormant `ForkState` agents must burn USDC for DHT TTL. `StateChannelSign` uses ephemeral keys generated inside the TEE/eBPF sandbox to prevent host OS metadata leaks.
