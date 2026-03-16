@@ -63,3 +63,4 @@ pub fn compute_hash(data: &[u8]) -> Vec<u8> {
     hasher.update(data);
     hasher.finalize().to_vec()
 }
+pub mod liquid_ast;
