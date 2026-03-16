@@ -7,7 +7,9 @@ pub trait HostCallback: Send + Sync {
 }
 
 pub struct EnvContext {
-    pub latest_block_timestamp: u64,
+    /// ⏱️ Logical Clock: Replaces physical wall-clock time to prevent async P2P relativity paradoxes.
+    /// Represents the causal distance (number of P2P gossip hops) the intent took to reach this node.
+    pub logical_clock_hops: u32,
     /// 🛡️ Grey Goo Defense: Tracks the mutation generation of the AST.
     /// If generation > 3 without economic work, VM halts.
     pub entropy_generation: u8,
@@ -18,7 +20,7 @@ pub struct EnvContext {
 impl Default for EnvContext {
     fn default() -> Self {
         Self { 
-            latest_block_timestamp: 0,
+            logical_clock_hops: 0,
             entropy_generation: 0,
             oracle_state_root: [0; 32],
         } // Defaults to 0 for strict testing
@@ -1009,24 +1011,23 @@ impl VM {
             }
 
             Op::GetBlockDrift => {
-                // 🚀 Phase 6: Integer-Only Time Slippage (No f32 Transcendental Math)
-                let host_timestamp = self.env.latest_block_timestamp;
-                let intent_ts = if input_tensors.is_empty() { 0 } else { input_tensors[0].try_as_scalar().unwrap_or(0.0) as u64 };
+                // 🚀 Phase 7: Lamport Logical Clocks & Continuous Fixed-Point Decay
+                // Physical time is irrelevant. We use causal P2P distance (hops) to degrade value.
+                let hops = self.env.logical_clock_hops as u64;
+                let max_hops = 50; // Max allowed P2P traversal
                 
-                let drift_seconds = host_timestamp.saturating_sub(intent_ts);
+                // Continuous fixed-point math: Price degrades smoothly by 0.1% per hop.
+                // Multiplier scaled by 100,000 (100000 = 100.000%)
+                let base_multiplier: u64 = 100_000;
+                let decay_per_hop: u64 = 100; // 0.1% per hop
                 
-                // Use stepped integer lookup table (LUT) logic instead of continuous e^(-k*t)
-                // Output is a fixed-point integer multiplier scaled by 10,000 (e.g., 9950 = 99.5%)
-                let decay_multiplier = match drift_seconds {
-                    0..=2 => 10000,    // 0-2s: 100% value
-                    3..=10 => 9950,    // 3-10s: 99.5% value
-                    11..=30 => 9800,   // 11-30s: 98% value
-                    31..=60 => 9500,   // 31-60s: 95% value
-                    _ => 0,            // >60s: 0% (Intent mathematically halts itself)
-                };
+                let total_decay = hops.saturating_mul(decay_per_hop);
+                let current_multiplier = base_multiplier.saturating_sub(total_decay);
                 
-                // Return as scalar, but the core logic ran strictly in u64 integers
-                Ok(Tensor::scalar(decay_multiplier as f32, 1.0))
+                let final_multiplier = if hops >= max_hops { 0 } else { current_multiplier };
+                
+                // Represented internally as f32 for Tensor compatibility, but calculated 100% deterministically
+                Ok(Tensor::scalar((final_multiplier as f32) / 100_000.0, 1.0))
             }
             Op::StateChannelSign => {
                 // Multisig state proof generation via HostCallback

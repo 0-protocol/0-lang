@@ -15,6 +15,7 @@ pub mod verify;
 pub mod vm;
 pub mod coprocessor;
 pub mod precompiles;
+pub mod ebpf;
 mod web3;
 
 // Include the generated Cap'n Proto types

@@ -1029,6 +1029,20 @@ impl RuntimeGraph {
     /// 🛡️ AST Genetic Resonance (Structural Entropy Extractor)
     /// Hashes the structural layout (opcodes/connections) PLUS the agent's identity and nonce.
     /// This prevents high-frequency market makers from being falsely flagged as spam when updating prices.
+
+    /// 🛡️ Canonical IR Normalization
+    /// Sorts inputs of commutative operations (Add, Mul, Max, Min, Eq) by their connection hashes
+    /// to ensure mathematically equivalent ASTs produce identical structural hashes,
+    /// preventing $2^N$ isomorphic Sybil attacks.
+    fn sort_commutative_inputs(op: &Op, inputs: &mut Vec<(NodeHash, u32)>) {
+        match op {
+            Op::Add | Op::Mul | Op::Max | Op::Min | Op::Eq => {
+                inputs.sort_by(|a, b| a.0.cmp(&b.0));
+            },
+            _ => {} // Non-commutative, preserve order
+        }
+    }
+
     pub fn structural_hash_with_identity(&self, agent_pubkey: &[u8], nonce: u64) -> [u8; 32] {
         use sha3::{Digest, Keccak256};
         let mut hasher = Keccak256::new();
@@ -1042,10 +1056,13 @@ impl RuntimeGraph {
             if let Some(node) = self.nodes.get(hash) {
                 match node {
                     RuntimeNode::Operation { op, inputs } => {
+                        let mut sorted_inputs = inputs.clone();
+                        Self::sort_commutative_inputs(op, &mut sorted_inputs);
+                        
                         hasher.update(&[0x01]); // Op marker
                         hasher.update(format!("{:?}", op).as_bytes()); // Deterministic AST operation string
-                        hasher.update(&(inputs.len() as u32).to_le_bytes());
-                        for input in inputs {
+                        hasher.update(&(sorted_inputs.len() as u32).to_le_bytes());
+                        for input in sorted_inputs {
                             hasher.update(&input.0);
                         }
                     },
