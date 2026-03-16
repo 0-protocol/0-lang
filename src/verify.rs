@@ -207,6 +207,7 @@ fn op_to_byte(op: Op) -> u8 {
         Op::ConfidenceDecay => 34,
         Op::ConfidenceBoost => 35,
         Op::VerifySignature => 36,
+        _ => 255,
     }
 }
 
