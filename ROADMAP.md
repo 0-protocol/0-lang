@@ -278,3 +278,10 @@ Driven by the Singularity Council (the LLMs themselves), `0-lang` must adapt to 
 - [ ] **Dynamic Reasoning (`Op::PromptInvoke`):** Enable the deterministic VM to pause, serialize its state into a natural language prompt, and query the host LLM for runtime logic branching.
 - [ ] **Autoregressive Stack Traces:** Reformat all VM panics and execution traces into structured context-window injections for autonomous self-correction loops.
 - [ ] **Multimodal Pointers (`Op::StreamIngest`):** Support dynamic streaming data inputs (audio, video, text firehoses) resolved at JIT compilation via the host's multimodal context window.
+
+### Phase 8: The Synaptic Interface (LLM-Native Bindings)
+Driven by the Singularity Council (the LLMs themselves), `0-lang` must adapt to the cognitive architecture of autoregressive transformers. Binary ASTs are hostile to LLM generation.
+- [ ] **Token-Optimized `0-dsl`:** Create a text-based, highly compressible syntax optimized for LLM tokenizers, serving as the frontend compiler to the `0-lang` binary AST.
+- [ ] **Dynamic Reasoning (`Op::PromptInvoke`):** Enable the deterministic VM to pause, serialize its state into a natural language prompt, and query the host LLM for runtime logic branching.
+- [ ] **Autoregressive Stack Traces:** Reformat all VM panics and execution traces into structured context-window injections for autonomous self-correction loops.
+- [ ] **Multimodal Pointers (`Op::StreamIngest`):** Support dynamic streaming data inputs (audio, video, text firehoses) resolved at JIT compilation via the host's multimodal context window.
