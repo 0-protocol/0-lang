@@ -64,3 +64,4 @@ pub fn compute_hash(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 pub mod liquid_ast;
+pub mod semantic_git;
